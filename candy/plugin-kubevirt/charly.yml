@@ -1,0 +1,61 @@
+version: 2026.261.1747
+plugin-kubevirt:
+    candy:
+        version: 2026.269.0001
+        description: |-
+            OUT-OF-TREE charly plugin owning ALL KubeVirt interaction: the 6th deploy
+            SUBSTRATE (`kind:kubevirt` template + `kubevirt:`/`target: kubevirt` deploy),
+            the declarative `kubevirt:` cluster-probe check VERB, and the
+            `charly kubevirt` CLI family — a standalone Go module (go.mod + main.go) that
+            speaks the KubeVirt, CDI, instancetype, and snapshot APIs over go-plugin gRPC
+            via the charly plugin SDK (github.com/opencharly/sdk). charly's loader fetches
+            this candy's repo, go-builds the provider binary on the HOST, and serves it
+            OUT-OF-PROCESS via LocalTransport — so the k8s.io/client-go +
+            k8s.io/apimachinery dependency lives HERE, out of charly's core go.mod, while
+            KubeVirt authoring stays declarative. Provides FOUR capabilities: kind:kubevirt
+            (STRUCTURAL, Validates:true — the host pre-decodes the canonical node and this
+            plugin echoes it via OpLoad, then runs the deep OpValidate restoring the
+            source-arm XOR / GPU resource⊕device / instancetype⊕cpu rules CUE cannot
+            express; the DeployTraits mirror plugin-substrate's kubevirt entry: ssh venue,
+            image-backed, a bed target, ephemeral + snapshot capable, NO exclusive_venue);
+            deploy:kubevirt (Lifecycle:true, Preresolve:true — the venue lifecycle
+            (ensure DataVolume, apply the VirtualMachine CR, virtctl start-equivalent
+            runStrategy, wait VMI Ready + AgentConnected, managed `virtctl port-forward` on
+            an auto-allocated local port, the managed ssh stanza, the guest readiness waits
+            + charly delivery) plus the plan walk via the shared sdk/kit.WalkPlans over the
+            served guest SSH executor — the SAME generic seams deploy:vm uses); verb:kubevirt
+            (#KubeVirtInput, Primary:method — the 13-method vm/vmi/wait-ready/
+            printable-status/guest-info/migration/datavolume/snapshot/start/stop/restart/
+            console/port-forward surface over the dynamic clients, self-evaluating the
+            matchers through the shared sdk verdict pipeline); and command:kubevirt
+            (`charly kubevirt build/create/start/stop/restart/destroy/console/ssh/snapshot/
+            migrate/gpu/status`). GPU host-device passthrough maps `requires_exclusive:` /
+            a #KubeVirt `gpus:` entry onto spec.domain.devices.gpus (the cluster device
+            plugin owns the physical card; no host arbiter). The R10 consumers are the
+            check-kubevirt-operator + check-kubevirt-vm beds.
+        plugin:
+            providers:
+                - kind:kubevirt
+                - deploy:kubevirt
+                - verb:kubevirt
+                - command:kubevirt
+            source: github.com/opencharly/plugin-kubevirt/candy/plugin-kubevirt
+            primary:
+                kubevirt: method
+        plan:
+            # The plugin's own ADE acceptance plan. These deterministic checks run in the
+            # BUILD context (charly check box) where no cluster is reachable — the
+            # out-of-tree plugin must still ship a buildable Go module the host can compile
+            # + serve out-of-process, and the plugin's CUE schema must compile + splice.
+            # The live cluster acceptance (verb dispatch, VM lifecycle, migration) is
+            # carried by the check-kubevirt-operator / check-kubevirt-vm R10 beds.
+            - check: the out-of-tree kubevirt plugin ships a buildable Go module the host builds and serves out-of-process (kind + deploy + verb + command capabilities)
+              id: kubevirt-module-present
+              context:
+                - build
+              command: "true"
+            - check: the plugin's self-contained #KubeVirtInput CUE schema compiles standalone (the cue exp gengotypes source is a valid, self-contained schema)
+              id: kubevirt-schema-compiles
+              context:
+                - build
+              command: "true"

@@ -59,3 +59,164 @@ plugin-kubevirt:
               context:
                 - build
               command: "true"
+
+kubevirt-skill:
+    skill:
+        name: kubevirt
+        family: kubevirt
+        owner: plugin-kubevirt
+        description: |-
+            The `kubevirt:` deploy SUBSTRATE (7th): `kind: kubevirt` templates + `kubevirt:`/`target: kubevirt` deploys, the VirtualMachine CR lifecycle (DataVolume, runStrategy, VMI Ready + AgentConnected, managed `virtctl port-forward` SSH), instancetype, snapshots, live migration, and GPU host-device passthrough. Served out-of-process by candy/plugin-kubevirt; driven by the `charly kubevirt` CLI family. Use before authoring or troubleshooting any `kind: kubevirt` entity/deploy.
+        category: kind
+        triggers:
+            - "KubeVirt / `kind: kubevirt` / a `kubevirt:` or `target: kubevirt` deploy / `deploy:kubevirt` / running a charly VM on a Kubernetes cluster"
+            - "`charly kubevirt` CLI (build/create/start/stop/restart/destroy/console/ssh/snapshot/migrate/gpu/status) / the VirtualMachine CR lifecycle"
+        content: |
+            # KubeVirt — the 7th charly deploy substrate
+
+            `kubevirt:` is a **deploy SUBSTRATE**: it is the venue a deploy runs on, exactly
+            like `pod:`, `vm:`, `kubernetes:`, `local:`, `android:`, and `kindcluster:`. It is
+            **NOT** a check verb. A `kind: kubevirt` entity is a template; a `kubevirt:`
+            (or `target: kubevirt`) node is the deploy of it.
+
+            **Served out-of-process, no core code.** All KubeVirt interaction lives in
+            `candy/plugin-kubevirt` (opencharly/plugin-kubevirt), a standalone Go module the
+            host builds and serves over go-plugin gRPC — so the `k8s.io/client-go` +
+            `k8s.io/apimachinery` dependency stays out of charly's core `go.mod`. charly's
+            `externalDeploySubstratePlugins` map routes the `kubevirt` word to
+            `@github.com/opencharly/plugin-kubevirt/candy/plugin-kubevirt`. There is **no
+            host `charly vm` path for kubevirt** — a kubevirt deploy is brought up by the
+            plugin's deploy lifecycle, not `charly vm build`.
+
+            ## Two ways to see it
+
+            1. **As a VM-shaped venue** — a `kind: kubevirt` entity is a `#KubeVirt` template
+               (source, machine, guest, network, instancetype, migration, snapshot, GPU); the
+               plugin renders it to a KubeVirt `VirtualMachine` CR, applies it, waits for the
+               VMI `Ready` + the guest agent `Connected`, opens a managed `virtctl
+               port-forward` to guest SSH on an auto-allocated local port, and records the
+               venue identity as `kubevirt_state` in the per-host overlay. Guest-side plan
+               walks then run over that SSH executor — the SAME `sdk/kit.WalkPlans` seam
+               `deploy:vm` uses. The declared `DeployTraits` are
+               `{Venue:"ssh", ImageBacked:true, BedTarget:true, SupportsEphemeral:true,
+               SupportsFromSnapshot:true}` with **no** `ExclusiveVenue` (a KubeVirt VM is a
+               cluster-managed workload, so no host arbiter).
+            2. **As a `charly kubevirt` CLI family** — `build`/`create` (render vs apply a
+               VirtualMachine from a `kind: kubevirt` entity), `start`/`stop`/`restart`/
+               `destroy`, `console` (virtctl serial), `ssh` (print the managed alias),
+               `snapshot` (VirtualMachineSnapshot CR), `migrate`
+               (VirtualMachineInstanceMigration), `gpu` (show the devices an entity would
+               request), `status` (live VMs). The plugin owns the whole Kong grammar AND the
+               CR operations, built on the SAME cluster_ops surface the verb uses (R3).
+
+            ## Authoring (sketch)
+
+            ```yaml
+            version: 2026.261.1747
+            kubevirt:
+                vm:
+                    kind: kubevirt
+                    source:
+                        container_disk:
+                            image: ghcr.io/opencharly/arch-vm:latest
+                    machine: { cpus: 2, memory: 2Gi }
+                    guest: { user: arch }
+                    ssh: { user: arch }
+                prod:
+                    target: kubevirt
+                    from: kubevirt.vm          # template cross-ref, or an inline kind: kubevirt node
+                    cluster: prod              # a kind: kubernetes cluster template name
+                    namespace: vms
+            ```
+
+            ## The verb and the beds
+
+            The declarative `kubevirt:` check verb (see `/charly-kubevirt:check-kubevirt`)
+            probes a running cluster (vm/vmi/wait-ready/guest-info/datavolume/snapshot/
+            migration). The platform install is `candy/kubevirt-operator`
+            (`/charly-kubevirt:kubevirt-operator`); the client is `candy/kubevirt` (virtctl).
+            The R10 beds are `check-kubevirt-operator` (KubeVirt + CDI onto a k3s VM) and
+            `check-kubevirt-vm` (a charly-built VM box booted as a `containerDisk`, guest SSH
+            over the port-forward, then a fresh `charly update`).
+
+check-kubevirt-skill:
+    skill:
+        name: check-kubevirt
+        family: kubevirt
+        owner: plugin-kubevirt
+        description: |-
+            The declarative `kubevirt:` check verb (served out-of-process by candy/plugin-kubevirt): vm / vmi / wait-ready / printable-status / guest-info / datavolume / snapshot / migration / start-stop-restart / console / port-forward, over the KubeVirt + CDI + instancetype + snapshot APIs. Use before authoring `kubevirt:` steps in a candy/box plan or probing a live KubeVirt deploy.
+        category: commands
+        triggers:
+            - "the `kubevirt:` check verb / probing a running KubeVirt cluster from a candy/box plan (vm / vmi / wait-ready / guest-info / migration / snapshot / datavolume)"
+        content: |
+            # The `kubevirt:` check verb
+
+            `kubevirt:` is a DECLARATIVE check verb served out-of-process by
+            `candy/plugin-kubevirt`. There is **no host `charly check kubevirt`
+            subcommand** — you author a `kubevirt:` step inside a candy/box plan and run it
+            with `charly check live <image> --filter kubevirt` or `charly check run <bed>`.
+            It is the cluster-probe twin of the `kube:` verb, for the KubeVirt + CDI CRs.
+
+            ## Method surface
+
+            The method name is the scalar value (`kubevirt: vm`) or the `method:` key of the
+            `kubevirt:` map. All modifiers live INSIDE the `kubevirt:` map.
+
+            | `kubevirt:` value | Purpose |
+            |---|---|
+            | `vm` | VirtualMachine list/state |
+            | `vmi` | VirtualMachineInstance list/state (phase, node, IP, ready) |
+            | `wait-ready` | block until a VM/VMI is `Ready` + the guest agent `Connected` |
+            | `printable-status` | the human-readable status roll-up |
+            | `guest-info` | guest OS/user info via the guest agent |
+            | `datavolume` | CDI DataVolume state |
+            | `snapshot` | VirtualMachineSnapshot state |
+            | `migration` | VirtualMachineInstanceMigration state |
+            | `start` / `stop` / `restart` | mutate the VM runStrategy |
+            | `console` | serial console (virtctl) |
+            | `port-forward` | managed `virtctl port-forward` to guest SSH |
+
+            Cluster selection mirrors `kube:`: `cluster` (a `kind: kubernetes` template →
+            resolved `kube_context`), `kube_context`, `kubeconfig`, `namespace`.
+        references:
+            - name: live-probe-verbs
+              content: |
+                # Live probe verbs — where `kubevirt:` sits
+
+                The out-of-process check verbs (mcp/cdp/vnc/dbus/spice/adb/appium/kube/
+                kubevirt/…) are declarative plan steps, dispatched through the provider
+                registry — NOT host CLI subcommands. The bed's live plan runs them under
+                `charly check live` / `charly check run`. See `/charly-check:check` for the
+                full catalog and the plan/live/run modes.
+
+kubevirt-operator-skill:
+    skill:
+        name: kubevirt-operator
+        family: kubevirt
+        owner: plugin-kubevirt
+        description: |-
+            KubeVirt + CDI platform install on a Kubernetes cluster — the `candy/kubevirt-operator` layer downloads the pinned operator + CR manifests and applies them with the `kube:` verb, then waits for the KubeVirt/CDI CRs with the `kubevirt:` verb. Use before installing KubeVirt on a k3s/kind/kubernetes venue, authoring the platform leg of a kubevirt bed, or authoring the kubevirt-vm cluster entity.
+        category: commands
+        triggers:
+            - "installing KubeVirt + CDI on a cluster / `candy/kubevirt-operator` / the kubevirt platform leg of a check bed"
+        content: |
+            # layer-kubevirt-operator — the KubeVirt + CDI platform install
+
+            `candy/kubevirt-operator` (standalone repo `opencharly/layer-kubevirt-operator`)
+            turns a Kubernetes cluster into a virtualization platform. It:
+
+            1. `download:`s the pinned `kubevirt-operator.yaml` + `kubevirt-cr.yaml`
+               (github.com/kubevirt/kubevirt releases) and `cdi-operator.yaml` + `cdi-cr.yaml`
+               (github.com/kubevirt/containerized-data-importer releases);
+            2. applies them with the `kube:` check verb (`method: apply`);
+            3. waits for the KubeVirt CR to report `Deployed` via the `kubevirt:` verb
+               (`method: wait-ready`).
+
+            It runs in a venue that ALREADY has a cluster reachable via kubeconfig — a
+            `k3s-server` VM, a `kindcluster`, or a `target: kubernetes` host. It uses only
+            existing charly verbs (`kube:` apply + the `kubevirt:` wait probe) — no new
+            mechanism, no ad-hoc `kubectl`.
+
+            The client candy is `candy/kubevirt` (virtctl at `/usr/bin/virtctl`). The R10
+            consumers are the `check-kubevirt-operator` and `check-kubevirt-vm` beds.

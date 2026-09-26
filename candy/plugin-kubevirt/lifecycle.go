@@ -77,7 +77,7 @@ func invokeLifecycle(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeRepl
 	case sdk.OpArtifactKey:
 		return marshalReply(map[string]string{"key": "kubevirt:" + vmNameForDeploy(p.Name), "entity": kvEntity(p)})
 	case sdk.OpTeardownExecutor:
-		return marshalReply(spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10})
+		return marshalReply(spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(deployDomain(p)), ConnectTimeout: 10})
 	case sdk.OpPostTeardown:
 		return kvPostTeardown(ctx, exec, p, host)
 	case sdk.OpStart:
@@ -98,14 +98,20 @@ func invokeLifecycle(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeRepl
 
 // vmNameForDeploy is the per-deploy VirtualMachine CR name — the SANITIZED deploy name
 // (the DOMAIN identity, not the shared entity), so sibling beds on one entity get
-// distinct CRs.
+// distinct CRs. It carries the charly- namespace because that IS the CR name.
 func vmNameForDeploy(name string) string {
 	return "charly-" + spec.VmDomainIdentity(name)
 }
 
-// sshAlias is the managed ssh-config alias for a deploy (the CR name).
-func sshAlias(p lifecycleParams) string {
-	return vmNameForDeploy(p.Name)
+// deployDomain is the BARE per-deploy DOMAIN identity (no charly- prefix) — the argument
+// the managed-ssh layer expects: the ssh alias is `kit.VmSshAlias(deployDomain(p))`
+// = "charly-<domain>" (the ONE canonical form every consumer — plugin-check's readiness
+// gate, plugin-deploy-vm, `charly vm cp-box` — derives from VmDomainIdentity), and
+// `charly vm cp-box <deployDomain>` prefixes it ONCE itself. Prefixing here as well
+// (the former `sshAlias` returned the already-namespaced CR name) produced
+// "charly-charly-<domain>": a stanza + venue alias NO consumer could ever resolve.
+func deployDomain(p lifecycleParams) string {
+	return spec.VmDomainIdentity(p.Name)
 }
 
 // kvEntity resolves the kind:kubevirt entity from the shipped node: node.From (the
@@ -244,7 +250,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 
 	// Publish the managed ssh stanza + Include.
 	if err := kit.WriteVmSshStanza(host.Home, kit.VmSshStanza{
-		Alias:        kit.VmSshAlias(sshAlias(p)),
+		Alias:        kit.VmSshAlias(deployDomain(p)),
 		Hostname:     "127.0.0.1",
 		Port:         port,
 		User:         sshUser,
@@ -256,7 +262,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: ensure ssh-config include: %w", err)
 	}
 
-	ssh := kit.SSHArgs{Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10}
+	ssh := kit.SSHArgs{Host: kit.VmSshAlias(deployDomain(p)), ConnectTimeout: 10}
 	rr, _ := vmshared.ResolveReadiness(nil)
 	poll := func(label string) kit.PollFunc {
 		return func(pctx context.Context, cond vmshared.PollCondition) error {
@@ -302,7 +308,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	// struct is ready to carry it.
 	_ = state
 	return marshalReply(spec.PrepareVenueReply{
-		Venue: spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10},
+		Venue: spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(deployDomain(p)), ConnectTimeout: 10},
 		Notes: notes,
 	})
 }
@@ -517,7 +523,7 @@ func kvPostApply(ctx context.Context, exec *sdk.Executor, p lifecycleParams, hos
 	if !node.HasMembers() {
 		return marshalReply(struct{}{})
 	}
-	domain := sshAlias(p)
+	domain := deployDomain(p)
 	charlyCmd := "/tmp/charly-" + host.Version
 	content, err := os.ReadFile(host.CharlyBin)
 	if err != nil {
@@ -653,7 +659,7 @@ func kvPostTeardown(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	}
 	// Stop the managed port-forward (by pidfile under this deploy's state dir).
 	stopPortForwardByPidfile(filepath.Join(kubevirtStateBase(host.Home), vm))
-	if remaining, err := kit.RemoveVmSshStanza(host.Home, kit.VmSshAlias(sshAlias(p))); err != nil {
+	if remaining, err := kit.RemoveVmSshStanza(host.Home, kit.VmSshAlias(deployDomain(p))); err != nil {
 		fmt.Fprintf(os.Stderr, "note: ssh-config stanza cleanup: %v\n", err)
 	} else if remaining == 0 {
 		if err := kit.RemoveSshConfigInclude(host.Home); err != nil {

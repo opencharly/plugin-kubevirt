@@ -19,6 +19,10 @@ It owns ALL KubeVirt interaction, out-of-process:
 - **`verb:kubevirt`** — the declarative `kubevirt:` cluster-probe check verb (13
   methods: `vm`, `vmi`, `wait-ready`, `printable-status`, `guest-info`, `migration`,
   `datavolume`, `snapshot`, `start`, `stop`, `restart`, `console`, `port-forward`).
+  `wait-ready` has two arms: it waits for a VirtualMachineInstance `Ready` in a VM
+  namespace, and — selected by the CR's canonical install namespace — for the KubeVirt
+  CR (`namespace: kubevirt`) or the CDI CR (`namespace: cdi`) to report phase
+  `Deployed`, so a platform bed asserts the operator platform itself.
 - **`command:kubevirt`** — the `charly kubevirt` CLI family (`build`, `create`,
   `start`, `stop`, `restart`, `destroy`, `console`, `ssh`, `snapshot`, `migrate`,
   `gpu`, `status`).

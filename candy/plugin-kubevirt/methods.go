@@ -13,6 +13,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/opencharly/plugin-kubevirt/candy/plugin-kubevirt/params"
 	"github.com/opencharly/sdk"
@@ -54,7 +56,14 @@ var requiredModifiers = map[string][]string{
 //nolint:gocyclo // a flat method switch over the 13-method allowlist; splitting would scatter the contract.
 func dispatch(conn *clusterConn, op *spec.Op, in *params.KubeVirtInput) (string, error) {
 	method := in.Method
-	if err := sdk.RequireModifiers(method, op, requiredModifiers); err != nil {
+	// wait-ready's platform arm — selected by a CR's canonical install namespace — derives
+	// its CR name from that namespace (the CR is always named after its kind there), so it
+	// has no explicit `name` prerequisite; the VMI arm does.
+	reqs := requiredModifiers
+	if method == "wait-ready" && platformWaitReady(in) {
+		reqs = map[string][]string{"wait-ready": nil}
+	}
+	if err := sdk.RequireModifiers(method, op, reqs); err != nil {
 		return "", err
 	}
 	switch method {
@@ -207,6 +216,16 @@ func runWaitReady(conn *clusterConn, op *spec.Op, in *params.KubeVirtInput) (str
 		return "", err
 	}
 	ns := namespaceOr(in)
+	// The platform-readiness arm: `wait-ready` asserts the KubeVirt/CDI operator
+	// PLATFORM when the selected resource is one of its CRs — selected by the CR's
+	// CANONICAL install namespace (kubevirt for the KubeVirt CR, cdi for the CDI CR),
+	// which is exactly the selector a platform bed has (there is no VM here to name,
+	// and the platform CR is always named after its kind in its install namespace).
+	// This is the `kubevirt: wait-ready` on the CRs the layer-kubevirt-operator plan
+	// requires; the VMI arm below stays for a VM/VMI readiness probe.
+	if kind, ok := platformCRForNamespace(ns); ok {
+		return waitPlatformCRReady(client, ns, in.Name, op, in, kind)
+	}
 	deadline := time.Now().Add(waitSecondsFor(op, in, 300*time.Second))
 	for {
 		u, err := client.Resource(gvrVMIs).Namespace(ns).Get(context.TODO(), in.Name, metav1.GetOptions{})
@@ -218,6 +237,92 @@ func runWaitReady(conn *clusterConn, op *spec.Op, in *params.KubeVirtInput) (str
 		}
 		if time.Now().After(deadline) {
 			return "", fmt.Errorf("timeout waiting for VirtualMachineInstance %s/%s Ready", ns, in.Name)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// platformCR is the kind + GVR + canonical install namespace of a KubeVirt-family
+// platform custom resource whose readiness `wait-ready` asserts via its Deployed phase.
+// clusterScoped selects the dynamic-Get path: a namespaced Get on a cluster-scoped
+// resource returns "NotFound: the server could not find the requested resource".
+type platformCR struct {
+	kind          string
+	gvr           schema.GroupVersionResource
+	ns            string
+	clusterScoped bool
+}
+
+// platformCRs is the KubeVirt platform-readiness table: the CRs whose own
+// <kind>.status.phase reaches "Deployed" when the operator has finished reconciling
+// its control plane. Their install namespaces are the canonical ones the upstream
+// operator manifests use, so a platform bed selects them by namespace alone.
+//
+// KubeVirt's CR is NAMESPACED (install namespace kubevirt); CDI's CDI CR is
+// CLUSTER-scoped (install namespace cdi is the operator's home). `ns` is the CR's
+// canonical install-location identifier; `clusterScoped` selects the API path.
+var platformCRs = []platformCR{
+	{kind: "KubeVirt", gvr: gvrKubeVirtCRs, ns: "kubevirt"},
+	{kind: "CDI", gvr: gvrCDICRs, ns: "cdi", clusterScoped: true},
+}
+
+// platformCRForNamespace resolves the platform CR a `wait-ready` probes from the
+// selected namespace, or (zero,false) when the namespace is not a platform install
+// namespace (so the caller falls through to the VMI arm).
+func platformCRForNamespace(ns string) (platformCR, bool) {
+	for _, cr := range platformCRs {
+		if cr.ns == ns {
+			return cr, true
+		}
+	}
+	return platformCR{}, false
+}
+
+// platformWaitReady reports whether a `wait-ready` targets a platform CR — the arm
+// selected by the CR's canonical install namespace (kubevirt / cdi). Such a wait has no
+// explicit `name` prerequisite: the CR name is derived from the namespace.
+func platformWaitReady(in *params.KubeVirtInput) bool {
+	_, ok := platformCRForNamespace(namespaceOr(in))
+	return ok
+}
+
+// waitPlatformCRReady waits for a platform CR's status.phase to report "Deployed" —
+// the bounded poll the layer-kubevirt-operator plan needs, over the SAME dynamic
+// client + phase read the whole plugin uses (R3). name defaults to the CR kind
+// lowercased (the upstream manifest names each CR after its kind: kubevirt, cdi).
+func waitPlatformCRReady(client dynamic.Interface, ns, name string, op *spec.Op, in *params.KubeVirtInput, cr platformCR) (string, error) {
+	if name == "" {
+		name = strings.ToLower(cr.kind)
+	}
+	// The CR's scope selects the API path: a cluster-scoped resource (CDI's CDI CR) has
+	// NO namespace segment — a namespaced Get on it returns "NotFound: the server could
+	// not find the requested resource", which would read as "phase=not found" forever.
+	var res dynamic.ResourceInterface
+	if cr.clusterScoped {
+		res = client.Resource(cr.gvr)
+	} else {
+		res = client.Resource(cr.gvr).Namespace(ns)
+	}
+	deadline := time.Now().Add(waitSecondsFor(op, in, 300*time.Second))
+	for {
+		u, err := res.Get(context.TODO(), name, metav1.GetOptions{})
+		if err == nil {
+			if phase := nestedString(u, "status", "phase"); phase == "Deployed" {
+				return fmt.Sprintf("%s/%s Deployed\n", ns, name), nil
+			}
+		}
+		if err != nil && !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("getting %s %s/%s: %w", cr.kind, ns, name, err)
+		}
+		if time.Now().After(deadline) {
+			phase := ""
+			if u, err := res.Get(context.TODO(), name, metav1.GetOptions{}); err == nil {
+				phase = nestedString(u, "status", "phase")
+			}
+			if phase == "" {
+				phase = "not found"
+			}
+			return "", fmt.Errorf("timeout waiting for %s %s/%s Deployed (phase=%s)", cr.kind, ns, name, phase)
 		}
 		time.Sleep(2 * time.Second)
 	}

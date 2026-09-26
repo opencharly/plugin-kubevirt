@@ -132,7 +132,7 @@ kubevirt-skill:
             ## The verb and the beds
 
             The declarative `kubevirt:` check verb (see `/charly-kubevirt:check-kubevirt`)
-            probes a running cluster (vm/vmi/wait-ready/guest-info/datacenter/snapshot/
+            probes a running cluster (vm/vmi/wait-ready/guest-info/datavolume/snapshot/
             migration). The platform install is `candy/kubevirt-operator`
             (`/charly-kubevirt:kubevirt-operator`); the client is `candy/kubevirt` (virtctl).
             The R10 beds are `check-kubevirt-operator` (KubeVirt + CDI onto a k3s VM) and

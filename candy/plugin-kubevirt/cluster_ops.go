@@ -76,15 +76,40 @@ func (c *dynamicCluster) Stop(ctx context.Context, namespace, vmName string) err
 }
 
 func (c *dynamicCluster) updateRunStrategy(ctx context.Context, namespace, vmName, strategy string) error {
-	u, err := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace).Get(ctx, vmName, metav1.GetOptions{})
-	if err != nil {
-		return err
+	iface := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace)
+	for attempt := 0; ; attempt++ {
+		u, err := iface.Get(ctx, vmName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if currentRunStrategy(u.Object) == strategy {
+			// Already at the target. The CR render sets runStrategy (the schema default),
+			// so this is the COMMON path — and returning here avoids a needless Update
+			// that races the VM controller ("the object has been modified; please apply
+			// your changes to the latest version" — observed live on the R10 bed).
+			return nil
+		}
+		if err := setRunStrategy(u.Object, strategy); err != nil {
+			return err
+		}
+		_, uerr := iface.Update(ctx, u, metav1.UpdateOptions{})
+		if uerr == nil {
+			return nil
+		}
+		if !apierrors.IsConflict(uerr) || attempt >= 1 {
+			return uerr
+		}
+		// A CONFLICT is the controller having advanced the object between this Get and the
+		// Update — re-read + re-apply ONCE (the Kubernetes optimistic-concurrency
+		// contract), never a blind sleep/retry loop.
 	}
-	if err := setRunStrategy(u.Object, strategy); err != nil {
-		return err
-	}
-	_, err = c.dyn.Resource(gvrVirtualMachines).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
-	return err
+}
+
+// currentRunStrategy reads a VirtualMachine's spec.runStrategy ("" when unset).
+func currentRunStrategy(obj map[string]any) string {
+	sp, _ := obj["spec"].(map[string]any)
+	s, _ := sp["runStrategy"].(string)
+	return s
 }
 
 // WaitVMIReady polls the VirtualMachineInstance's Ready condition.

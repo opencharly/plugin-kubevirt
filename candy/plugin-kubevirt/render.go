@@ -115,9 +115,16 @@ func RenderVirtualMachine(kv spec.KubeVirt, opts RenderOptions) (map[string]any,
 			"spec": templateSpec,
 		},
 	}
-	if kv.RunStrategy != "" {
-		specBody["runStrategy"] = kv.RunStrategy
+	// runStrategy is REQUIRED by the KubeVirt VM webhook (runStrategy XOR running). The
+	// schema declares a DEFAULT (#Kubevirt.run_strategy *"Always"), but a plain JSON decode
+	// does not carry a CUE default into the Go struct, so an authoring template that omits it
+	// arrives as "" and the emitted CR is rejected ("RunStrategy must be specified"). Honor
+	// the schema's declared default here so every emitted VirtualMachine is well-formed.
+	runStrategy := kv.RunStrategy
+	if runStrategy == "" {
+		runStrategy = "Always"
 	}
+	specBody["runStrategy"] = runStrategy
 	if kv.EvictionStrategy != "" {
 		specBody["evictionStrategy"] = kv.EvictionStrategy
 	}

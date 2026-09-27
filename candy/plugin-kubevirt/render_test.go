@@ -373,3 +373,29 @@ func TestRenderVirtualMachine_RequiresExclusiveGPU(t *testing.T) {
 		t.Errorf("gpus = %v", gpus)
 	}
 }
+
+// TestRenderVirtualMachine_ContainerDiskPath asserts the authored
+// source.disk_path_in_image renders the containerDisk `path` (a disk NOT at KubeVirt's
+// scanned /disk/disk.img — e.g. a charly VM box emitted at /disk.qcow2). Fails without
+// the field/render (the path key would be absent).
+func TestRenderVirtualMachine_ContainerDiskPath(t *testing.T) {
+	render := func(kv spec.KubeVirt) map[string]any {
+		obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "vm", Namespace: "default", Distro: "arch", SSHUser: "arch", SSHKey: "ssh-ed25519 AAAATEST"})
+		if err != nil {
+			t.Fatalf("RenderVirtualMachine: %v", err)
+		}
+		tmplSpec := obj["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		return tmplSpec["volumes"].([]any)[0].(map[string]any)["containerDisk"].(map[string]any)
+	}
+
+	kv := containerDiskKV()
+	kv.Source.DiskPathInImage = "/disk.qcow2"
+	if cd := render(kv); cd["path"] != "/disk.qcow2" {
+		t.Fatalf("containerDisk.path = %v, want /disk/qcow2", cd["path"])
+	}
+
+	plain := containerDiskKV()
+	if cd := render(plain); cd["path"] != nil {
+		t.Errorf("unset disk_path_in_image must not render a path; got %v", cd["path"])
+	}
+}

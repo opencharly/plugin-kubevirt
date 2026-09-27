@@ -282,6 +282,12 @@ func renderStorage(kv spec.KubeVirt, bootName string) (volumes []any, networks [
 		if src.PullSecret != "" {
 			cd["imagePullSecret"] = src.PullSecret
 		}
+		// A disk NOT at KubeVirt's scanned default (/disk/disk.img) — e.g. a charly VM
+		// box emitted at /disk.qcow2 — needs the explicit path; KubeVirt scans /disk
+		// and requires the single file there, so the authored path is what boots it.
+		if src.DiskPathInImage != "" {
+			cd["path"] = src.DiskPathInImage
+		}
 		volumes = append(volumes, map[string]any{"name": bootName, "containerDisk": cd})
 	case "data_volume", "clone":
 		volumes = append(volumes, map[string]any{"name": bootName, "dataVolume": map[string]any{"name": bootName}})

@@ -399,3 +399,26 @@ func TestRenderVirtualMachine_ContainerDiskPath(t *testing.T) {
 		t.Errorf("unset disk_path_in_image must not render a path; got %v", cd["path"])
 	}
 }
+
+// TestRenderVirtualMachine_RunStrategyDefaults pins the KubeVirt webhook requirement
+// (runStrategy XOR running): the schema declares #Kubevirt.run_strategy *"Always", but a
+// plain JSON decode does not carry a CUE default into the Go struct, so a template that
+// omits it arrives as "" — the renderer must still emit the schema's declared default, or
+// the emitted CR is rejected with "RunStrategy must be specified" (the check-kubevirt-vm R10).
+func TestRenderVirtualMachine_RunStrategyDefaults(t *testing.T) {
+	kv := containerDiskKV()
+	kv.RunStrategy = "" // the authoring template omitted run_strategy
+	obj, err := RenderVirtualMachine(kv, RenderOptions{
+		Name:      "charly-kv-default",
+		Namespace: "charly",
+		Distro:    "arch",
+		SSHUser:   "arch",
+		SSHKey:    "ssh-ed25519 AAAATEST",
+	})
+	if err != nil {
+		t.Fatalf("RenderVirtualMachine: %v", err)
+	}
+	if got := obj["spec"].(map[string]any)["runStrategy"]; got != "Always" {
+		t.Fatalf("runStrategy = %v, want the schema default Always", got)
+	}
+}

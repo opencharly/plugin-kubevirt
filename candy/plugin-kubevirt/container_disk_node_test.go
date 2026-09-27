@@ -67,6 +67,9 @@ func TestEnsureContainerDiskOnNode(t *testing.T) {
 	if len(imports) != 1 || imports[0].alias != "charly-check-kubevirt-vm" || imports[0].ref != ref {
 		t.Errorf("absent case imports = %v, want one import of %s to charly-check-kubevirt-vm", imports, ref)
 	}
+	if len(probed) != 1 || probed[0] != "charly-check-kubevirt-vm|"+ref {
+		t.Errorf("absent case probed = %v, want exactly one probe of charly-check-kubevirt-vm|%s", probed, ref)
+	}
 
 	// Present → no import.
 	containerDiskNodeImagePresent = func(_, _, _ string) (bool, error) { return true, nil }
@@ -105,6 +108,4 @@ func TestEnsureContainerDiskOnNode(t *testing.T) {
 	if err := ensureContainerDiskOnNode(context.Background(), host, node, "x", "", nil); err != nil {
 		t.Fatalf("nil kv case: %v", err)
 	}
-
-	_ = probed
 }

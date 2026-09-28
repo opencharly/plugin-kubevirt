@@ -7,6 +7,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
@@ -76,60 +77,23 @@ func (c *dynamicCluster) Stop(ctx context.Context, namespace, vmName string) err
 }
 
 // updateRunStrategy idempotently drives a VirtualMachine to a run strategy. It is
-// CONFLICT-TOLERANT by design: the VM controller concurrently reconciles the same
-// object, so a bare Get→Update loses the optimistic-concurrency race
-// ("…the object has been modified; please apply your changes to the latest version" —
-// observed live on the check-kubevirt-vm R10). Two mechanisms make it robust:
-//
-//  1. SATISFIED CHECK — skip the Update entirely when the object already satisfies
-//     the target. The CR render sets spec.runStrategy (the schema default, render.go),
-//     so this is the COMMON path.
-//  2. RE-GET + RE-APPLY on a real CONFLICT — bounded re-reads (the Kubernetes
-//     optimistic-concurrency contract), NOT a blind sleep/retry. Each re-read
-//     re-checks SATISFIED first, because the controller may have reached the desired
-//     state on its own during the conflict — in which case there is nothing to do.
+// CONFLICT-FREE by construction: a JSON MERGE PATCH sets only spec.runStrategy and
+// leaves the resourceVersion unset, so it never contends with the VM controller's
+// concurrent updates to the same object — the "the object has been modified; please
+// apply your changes to the latest version" conflict a read-modify-write Update loses
+// repeatedly (observed live on the check-kubevirt-vm R10, where the controller
+// reconciles the VM every few seconds). The patch is also idempotent: re-applying the
+// same value is a no-op at the server.
 func (c *dynamicCluster) updateRunStrategy(ctx context.Context, namespace, vmName, strategy string) error {
-	iface := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace)
-	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		u, err := iface.Get(ctx, vmName, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		if vmRunStrategySatisfied(u.Object, strategy) {
-			return nil
-		}
-		if err := setRunStrategy(u.Object, strategy); err != nil {
-			return err
-		}
-		if _, uerr := iface.Update(ctx, u, metav1.UpdateOptions{}); uerr == nil {
-			return nil
-		} else if !apierrors.IsConflict(uerr) {
-			return uerr
-		} else {
-			lastErr = uerr
-		}
-	}
-	return fmt.Errorf("setting runStrategy %q on virtualmachine %q: %w", strategy, vmName, lastErr)
+	_, err := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace).
+		Patch(ctx, vmName, types.MergePatchType, runStrategyPatch(strategy), metav1.PatchOptions{})
+	return err
 }
 
-// vmRunStrategySatisfied reports whether a VirtualMachine already satisfies the target
-// run strategy. currentRunStrategy covers the explicit spec.runStrategy; the "Always"
-// target is ALSO satisfied by spec.running==true, which is the controller's own
-// normalization of a continuously-running VM — without this the satisfied check misses
-// a VM the controller already started, and the next Update conflicts.
-func vmRunStrategySatisfied(obj map[string]any, strategy string) bool {
-	if currentRunStrategy(obj) == strategy {
-		return true
-	}
-	if strategy == "Always" {
-		if sp, ok := obj["spec"].(map[string]any); ok {
-			if running, ok := sp["running"].(bool); ok && running {
-				return true
-			}
-		}
-	}
-	return false
+// runStrategyPatch is the JSON merge-patch body for a run-strategy change: the ONE
+// place the patch shape is built, so it is unit-testable without a cluster.
+func runStrategyPatch(strategy string) []byte {
+	return []byte(`{"spec":{"runStrategy":"` + strategy + `"}}`)
 }
 
 // currentRunStrategy reads a VirtualMachine's spec.runStrategy ("" when unset).

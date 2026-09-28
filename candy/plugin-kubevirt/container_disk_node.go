@@ -50,7 +50,7 @@ func containerDiskNodeAlias(node *spec.Deploy, name, kubeContext string) string 
 	// A charly-managed k3s VM publishes its kubeconfig context as vm-<domain>
 	// (plugin-kube's k3s post-provision). Its ssh alias is charly-<domain>.
 	if strings.HasPrefix(kubeContext, "vm-") {
-		return "charly-" + strings.TrimPrefix(kubeContext, "vm-")
+		return kit.VmSshAlias(strings.TrimPrefix(kubeContext, "vm-"))
 	}
 	return ""
 }

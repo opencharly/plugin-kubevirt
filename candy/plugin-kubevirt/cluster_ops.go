@@ -75,34 +75,61 @@ func (c *dynamicCluster) Stop(ctx context.Context, namespace, vmName string) err
 	return c.updateRunStrategy(ctx, namespace, vmName, "Halted")
 }
 
+// updateRunStrategy idempotently drives a VirtualMachine to a run strategy. It is
+// CONFLICT-TOLERANT by design: the VM controller concurrently reconciles the same
+// object, so a bare Get→Update loses the optimistic-concurrency race
+// ("…the object has been modified; please apply your changes to the latest version" —
+// observed live on the check-kubevirt-vm R10). Two mechanisms make it robust:
+//
+//  1. SATISFIED CHECK — skip the Update entirely when the object already satisfies
+//     the target. The CR render sets spec.runStrategy (the schema default, render.go),
+//     so this is the COMMON path.
+//  2. RE-GET + RE-APPLY on a real CONFLICT — bounded re-reads (the Kubernetes
+//     optimistic-concurrency contract), NOT a blind sleep/retry. Each re-read
+//     re-checks SATISFIED first, because the controller may have reached the desired
+//     state on its own during the conflict — in which case there is nothing to do.
 func (c *dynamicCluster) updateRunStrategy(ctx context.Context, namespace, vmName, strategy string) error {
 	iface := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace)
-	for attempt := 0; ; attempt++ {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
 		u, err := iface.Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
-		if currentRunStrategy(u.Object) == strategy {
-			// Already at the target. The CR render sets runStrategy (the schema default),
-			// so this is the COMMON path — and returning here avoids a needless Update
-			// that races the VM controller ("the object has been modified; please apply
-			// your changes to the latest version" — observed live on the R10 bed).
+		if vmRunStrategySatisfied(u.Object, strategy) {
 			return nil
 		}
 		if err := setRunStrategy(u.Object, strategy); err != nil {
 			return err
 		}
-		_, uerr := iface.Update(ctx, u, metav1.UpdateOptions{})
-		if uerr == nil {
+		if _, uerr := iface.Update(ctx, u, metav1.UpdateOptions{}); uerr == nil {
 			return nil
-		}
-		if !apierrors.IsConflict(uerr) || attempt >= 1 {
+		} else if !apierrors.IsConflict(uerr) {
 			return uerr
+		} else {
+			lastErr = uerr
 		}
-		// A CONFLICT is the controller having advanced the object between this Get and the
-		// Update — re-read + re-apply ONCE (the Kubernetes optimistic-concurrency
-		// contract), never a blind sleep/retry loop.
 	}
+	return fmt.Errorf("setting runStrategy %q on virtualmachine %q: %w", strategy, vmName, lastErr)
+}
+
+// vmRunStrategySatisfied reports whether a VirtualMachine already satisfies the target
+// run strategy. currentRunStrategy covers the explicit spec.runStrategy; the "Always"
+// target is ALSO satisfied by spec.running==true, which is the controller's own
+// normalization of a continuously-running VM — without this the satisfied check misses
+// a VM the controller already started, and the next Update conflicts.
+func vmRunStrategySatisfied(obj map[string]any, strategy string) bool {
+	if currentRunStrategy(obj) == strategy {
+		return true
+	}
+	if strategy == "Always" {
+		if sp, ok := obj["spec"].(map[string]any); ok {
+			if running, ok := sp["running"].(bool); ok && running {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // currentRunStrategy reads a VirtualMachine's spec.runStrategy ("" when unset).

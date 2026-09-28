@@ -1,7 +1,5 @@
-version: 2026.261.1747
 plugin-kubevirt:
     candy:
-        version: 2026.269.0001
         description: |-
             OUT-OF-TREE charly plugin owning ALL KubeVirt interaction: the 6th deploy
             SUBSTRATE (`kind:kubevirt` template + `kubevirt:`/`target: kubevirt` deploy),

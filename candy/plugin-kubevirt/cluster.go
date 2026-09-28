@@ -109,6 +109,7 @@ var (
 	gvrDataVolumes     = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
 	gvrInstancetypes   = schema.GroupVersionResource{Group: "instancetype.kubevirt.io", Version: "v1beta1", Resource: "virtualmachineinstancetypes"}
 	gvrKubeVirtCRs     = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "kubevirts"}
+	gvrCDICRs          = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "cdis"}
 )
 
 // resolveClusterContext resolves a `cluster: <profile>` to a concrete kubeconfig context

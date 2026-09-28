@@ -15,6 +15,68 @@ import (
 // dispatch_test.go — the dispatch surfaces: the deep OpValidate rules, the kind OpLoad
 // echo, the class routing, and the verb's box-mode skip. These are cluster-free.
 
+// TestPlatformWaitReady_WaivesNameRequirement pins the wait-ready platform arm's
+// required-modifier behavior: a platform CR wait (selected by the canonical install
+// namespace kubevirt/cdi, no explicit name) does NOT require `name`, while a VMI wait
+// still does. Without this the operator bed's `kubevirt: wait-ready` failed with
+// "missing required modifier(s): name" even though the platform CR name is derived.
+func TestPlatformWaitReady_WaivesNameRequirement(t *testing.T) {
+	// Platform arm: namespace kubevirt/cdi → no `name` requirement.
+	for _, ns := range []string{"kubevirt", "cdi"} {
+		in := &params.KubeVirtInput{Method: "wait-ready", Namespace: ns}
+		if !platformWaitReady(in) {
+			t.Errorf("platformWaitReady(ns=%q) = false, want true", ns)
+		}
+	}
+	// VMI arm: any other namespace (incl. default) still requires `name`.
+	for _, ns := range []string{"", "default", "my-vms"} {
+		in := &params.KubeVirtInput{Method: "wait-ready", Namespace: ns}
+		if platformWaitReady(in) {
+			t.Errorf("platformWaitReady(ns=%q) = true, want false", ns)
+		}
+	}
+}
+
+// KubeVirt CR (kubevirt ns) and the CDI CR (cdi ns) resolve to their platform arm, and
+// any other namespace (a VMI's default/namespace) falls through to the VMI arm. This is
+// the selector that lets `kubevirt: wait-ready` assert the operator PLATFORM the
+// layer-kubevirt-operator plan requires, with no VM to name.
+func TestPlatformCRForNamespace(t *testing.T) {
+	cases := []struct {
+		ns       string
+		wantOK   bool
+		wantKind string
+	}{
+		{"kubevirt", true, "KubeVirt"},
+		{"cdi", true, "CDI"},
+		{"default", false, ""},
+		{"my-vms", false, ""},
+		{"", false, ""},
+	}
+	for _, tc := range cases {
+		cr, ok := platformCRForNamespace(tc.ns)
+		if ok != tc.wantOK {
+			t.Errorf("platformCRForNamespace(%q) ok=%v, want %v", tc.ns, ok, tc.wantOK)
+			continue
+		}
+		if ok && cr.kind != tc.wantKind {
+			t.Errorf("platformCRForNamespace(%q).kind = %q, want %q", tc.ns, cr.kind, tc.wantKind)
+		}
+	}
+	// The API-path scope is per CR and MUST match the real cluster (RDD-measured:
+	// `kubectl api-resources` — kubevirts NAMESPACED=true, cdis NAMESPACED=false). A
+	// namespaced Get on the cluster-scoped CDI CR returns "NotFound: the server could not
+	// find the requested resource", reading as "phase=not found" forever.
+	kv, _ := platformCRForNamespace("kubevirt")
+	if kv.clusterScoped {
+		t.Error("KubeVirt CR is namespaced (kubevirts NAMESPACED=true); clusterScoped must be false")
+	}
+	cdi, _ := platformCRForNamespace("cdi")
+	if !cdi.clusterScoped {
+		t.Error("CDI CR is cluster-scoped (cdis NAMESPACED=false); clusterScoped must be true")
+	}
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)

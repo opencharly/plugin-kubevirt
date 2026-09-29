@@ -421,35 +421,38 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	if namespace != "" {
 		argv = append(argv, "--namespace", namespace)
 	}
-	// The virt-launcher pod of THIS VMI, by its own label — the host-reachable
-	// target (`kubectl port-forward pod/… <local>:22`). Resolved host-side with
-	// kubectl (present on the host), never `virtctl` (guest-only).
-	podArg := "pod/" + vmName
-	launcher, lerr := virtLauncherPodName(ctx, kubeContext, namespace, vmName)
-	if lerr != nil {
-		return nil, fmt.Errorf("port-forward: resolve virt-launcher pod for %q: %w", vmName, lerr)
-	}
-	if launcher != "" {
-		podArg = "pod/" + launcher
-	}
-	// kubectl's port spec is positional `[LOCAL:]REMOTE` (unlike virtctl's
-	// `--local-port`/`--port` flags).
-	argv = append(argv, podArg, fmt.Sprintf("%d:22", localPort))
-	logFile := filepath.Join(stateDir, "port-forward.log")
-	// setsid detaches into a new session so it outlives the plugin subprocess. A
-	// SUPERVISED restart loop: `kubectl port-forward` exits on a transient forward
-	// failure (e.g. the guest's sshd is not up yet during cloud-init — the observed
-	// "failed to connect to localhost:22 inside namespace … / lost connection to
-	// pod"), and the detached process would otherwise stay dead while WaitForSSH
-	// polls its (now dead) port for the whole readiness cap. The loop re-establishes
-	// the forward until the guest's sshd is reachable.
+	// kubectl's port spec is positional `[LOCAL:]REMOTE`; the target pod is
+	// resolved inside the loop (the launcher pod is recreated on VMI restart).
 	quoted := make([]string, 0, len(argv))
 	for _, a := range argv {
 		quoted = append(quoted, shellquote.ShellQuote(a))
 	}
+	// The kubectl prelude that RE-RESOLVES the launcher pod of THIS VMI each
+	// iteration (host kubectl; the VMI kind is not in client-go's static scheme,
+	// virtctl is guest-only).
+	resolve := []string{"get", "pods"}
+	if namespace != "" {
+		resolve = append(resolve, "-n", namespace)
+	}
+	resolve = append(resolve, "-l", "vm.kubevirt.io/name="+vmName, "-o", "jsonpath={.items[0].metadata.name}")
+	if kubeContext != "" {
+		resolve = append(resolve, "--context", kubeContext)
+	}
+	resolveQuoted := make([]string, 0, len(resolve))
+	for _, a := range resolve {
+		resolveQuoted = append(resolveQuoted, shellquote.ShellQuote(a))
+	}
+	logFile := filepath.Join(stateDir, "port-forward.log")
+	// setsid detaches into a new session so it outlives the plugin subprocess. The
+	// loop RE-RESOLVES the pod every iteration (a VMI restart recreates the pod with
+	// a new name, so a once-resolved `pod/<name>` goes stale — "pods … not found" —
+	// while WaitForSSH polls forever) and restarts on a transient forward failure
+	// (the guest's sshd not up yet under cloud-init).
 	script := fmt.Sprintf(
-		"setsid sh -c 'while true; do kubectl %s >>%s 2>&1; sleep 2; done' >/dev/null 2>&1 & echo $! >%s",
-		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), shellquote.ShellQuote(pidFile))
+		"setsid sh -c 'while true; do POD=$(kubectl %s 2>/dev/null); if [ -n \"$POD\" ]; then kubectl %s \"pod/$POD\" \"%d:22\" >>%s 2>&1; fi; sleep 2; done' >/dev/null 2>&1 & echo $! >%s",
+		strings.Join(resolveQuoted, " "),
+		strings.Join(quoted, " "),
+		localPort, shellquote.ShellQuote(logFile), shellquote.ShellQuote(pidFile))
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
 		return nil, err
@@ -459,26 +462,6 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 		return nil, fmt.Errorf("port-forward: process did not start (no live pid in %s)", pidFile)
 	}
 	return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
-}
-
-// virtLauncherPodName resolves the virt-launcher pod of the VMI by the VMI's own
-// `vm.kubevirt.io/name` label, using host kubectl (the VMI kind is not in
-// client-go's static scheme, and virtctl is guest-only). Empty/err → the caller
-// falls back to the VMI-name form, which the forward log surfaces if it fails.
-func virtLauncherPodName(ctx context.Context, kubeContext, namespace, vmName string) (string, error) {
-	args := []string{"get", "pods"}
-	if namespace != "" {
-		args = append(args, "-n", namespace)
-	}
-	args = append(args, "-l", "vm.kubevirt.io/name="+vmName, "-o", "jsonpath={.items[0].metadata.name}")
-	if kubeContext != "" {
-		args = append(args, "--context", kubeContext)
-	}
-	out, err := exec.CommandContext(ctx, "kubectl", args...).Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // readLivePid reads a pidfile and reports whether it names a live process.

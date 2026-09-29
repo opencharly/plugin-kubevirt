@@ -411,8 +411,14 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 		return nil, fmt.Errorf("port-forward: no state dir")
 	}
 	pidFile := filepath.Join(stateDir, "port-forward.pid")
+	// ALWAYS (re)start: a pidfile left by a PREVIOUS run names a live process that
+	// targets the PREVIOUS launcher pod — reusing it (a bare liveness check) points
+	// the forward at a pod that no longer exists ("pods … not found") and WaitForSSH
+	// then polls a dead port for the whole cap. PrepareVenue owns the forward's
+	// lifecycle, so kill any prior one and start fresh against the current VMI.
 	if pid, ok := readLivePid(pidFile); ok {
-		return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
+		_ = syscall.Kill(pid, syscall.SIGTERM)
 	}
 	argv := []string{"port-forward"}
 	if kubeContext != "" {

@@ -432,7 +432,9 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	if launcher != "" {
 		podArg = "pod/" + launcher
 	}
-	argv = append(argv, podArg, "--local-port", strconv.Itoa(localPort), "--port", "22")
+	// kubectl's port spec is positional `[LOCAL:]REMOTE` (unlike virtctl's
+	// `--local-port`/`--port` flags).
+	argv = append(argv, podArg, fmt.Sprintf("%d:22", localPort))
 	logFile := filepath.Join(stateDir, "port-forward.log")
 	// setsid detaches into a new session so it outlives the plugin subprocess.
 	quoted := make([]string, 0, len(argv))

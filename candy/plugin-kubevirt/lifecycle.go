@@ -436,12 +436,19 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	// `--local-port`/`--port` flags).
 	argv = append(argv, podArg, fmt.Sprintf("%d:22", localPort))
 	logFile := filepath.Join(stateDir, "port-forward.log")
-	// setsid detaches into a new session so it outlives the plugin subprocess.
+	// setsid detaches into a new session so it outlives the plugin subprocess. A
+	// SUPERVISED restart loop: `kubectl port-forward` exits on a transient forward
+	// failure (e.g. the guest's sshd is not up yet during cloud-init — the observed
+	// "failed to connect to localhost:22 inside namespace … / lost connection to
+	// pod"), and the detached process would otherwise stay dead while WaitForSSH
+	// polls its (now dead) port for the whole readiness cap. The loop re-establishes
+	// the forward until the guest's sshd is reachable.
 	quoted := make([]string, 0, len(argv))
 	for _, a := range argv {
 		quoted = append(quoted, shellquote.ShellQuote(a))
 	}
-	script := fmt.Sprintf("setsid kubectl %s >>%s 2>&1 & echo $! >%s",
+	script := fmt.Sprintf(
+		"setsid sh -c 'while true; do kubectl %s >>%s 2>&1; sleep 2; done' >/dev/null 2>&1 & echo $! >%s",
 		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), shellquote.ShellQuote(pidFile))
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
@@ -496,7 +503,11 @@ type virtctlPortForward struct {
 }
 
 func (p *virtctlPortForward) Stop() error {
+	// The forward runs as a supervised `setsid sh -c 'while…'` loop in its OWN
+	// process group; kill the GROUP (negative pid) so the loop's kubectl child
+	// dies too, not just the group leader.
 	if p.pid > 0 {
+		_ = syscall.Kill(-p.pid, syscall.SIGTERM)
 		_ = syscall.Kill(p.pid, syscall.SIGTERM)
 	}
 	if p.pidFile != "" {

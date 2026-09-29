@@ -392,11 +392,20 @@ type portForwarder interface {
 	Stop() error
 }
 
-// startVirtctlPortForward spawns a DETACHED `virtctl port-forward` bound to the deploy's
-// state dir (setsid; pidfile `port-forward.pid`; log `port-forward.log`). Detaching
-// matters: the plugin runs as a host subprocess per Invoke and exits after PrepareVenue,
-// so a child of the plugin process would be reaped when it returns. Idempotent: when the
-// pidfile names a live process, it is reused rather than a second forward started.
+// startKubectlPodPortForward spawns a DETACHED `kubectl port-forward` to the VMI's
+// virt-launcher POD (setsid; pidfile `port-forward.pid`; log `port-forward.log`).
+//
+// WHY THE POD, NOT `virtctl`: `virtctl` is installed in the K3s NODE (the
+// layer-kubevirt candy), NOT on the host — a host `setsid virtctl …` fails with
+// "failed to execute virtctl: No such file or directory", so the forward never
+// comes up and WaitForSSH times out on the (correct but dead) managed stanza port.
+// `kubectl` IS on the host, and the VMI's virt-launcher pod forwards port 22 to
+// the guest's sshd, so `kubectl port-forward <launcher-pod> <local>:22` is the
+// host-available equivalent. The launcher pod is selected by the VMI's own
+// `vm.kubevirt.io/name=<vmName>` label. Detaching matters: the plugin runs as a
+// host subprocess per Invoke and exits after PrepareVenue, so a child of the
+// plugin process would be reaped when it returns. Idempotent: a live pidfile
+// process is reused.
 func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
 	if stateDir == "" {
 		return nil, fmt.Errorf("port-forward: no state dir")
@@ -412,14 +421,25 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	if namespace != "" {
 		argv = append(argv, "--namespace", namespace)
 	}
-	argv = append(argv, vmName, "--local-port", strconv.Itoa(localPort), "--port", "22")
+	// The virt-launcher pod of THIS VMI, by its own label — the host-reachable
+	// target (`kubectl port-forward pod/… <local>:22`). Resolved host-side with
+	// kubectl (present on the host), never `virtctl` (guest-only).
+	podArg := "pod/" + vmName
+	launcher, lerr := virtLauncherPodName(ctx, kubeContext, namespace, vmName)
+	if lerr != nil {
+		return nil, fmt.Errorf("port-forward: resolve virt-launcher pod for %q: %w", vmName, lerr)
+	}
+	if launcher != "" {
+		podArg = "pod/" + launcher
+	}
+	argv = append(argv, podArg, "--local-port", strconv.Itoa(localPort), "--port", "22")
 	logFile := filepath.Join(stateDir, "port-forward.log")
 	// setsid detaches into a new session so it outlives the plugin subprocess.
 	quoted := make([]string, 0, len(argv))
 	for _, a := range argv {
 		quoted = append(quoted, shellquote.ShellQuote(a))
 	}
-	script := fmt.Sprintf("setsid virtctl %s >>%s 2>&1 & echo $! >%s",
+	script := fmt.Sprintf("setsid kubectl %s >>%s 2>&1 & echo $! >%s",
 		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), shellquote.ShellQuote(pidFile))
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
@@ -430,6 +450,26 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 		return nil, fmt.Errorf("port-forward: process did not start (no live pid in %s)", pidFile)
 	}
 	return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+}
+
+// virtLauncherPodName resolves the virt-launcher pod of the VMI by the VMI's own
+// `vm.kubevirt.io/name` label, using host kubectl (the VMI kind is not in
+// client-go's static scheme, and virtctl is guest-only). Empty/err → the caller
+// falls back to the VMI-name form, which the forward log surfaces if it fails.
+func virtLauncherPodName(ctx context.Context, kubeContext, namespace, vmName string) (string, error) {
+	args := []string{"get", "pods"}
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+	args = append(args, "-l", "vm.kubevirt.io/name="+vmName, "-o", "jsonpath={.items[0].metadata.name}")
+	if kubeContext != "" {
+		args = append(args, "--context", kubeContext)
+	}
+	out, err := exec.CommandContext(ctx, "kubectl", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // readLivePid reads a pidfile and reports whether it names a live process.

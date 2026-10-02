@@ -4,8 +4,8 @@ go 1.26.4
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/opencharly/sdk v0.2026268.1823
-	github.com/opencharly/spec v0.2026268.2214
+	github.com/opencharly/sdk v0.2026273.207
+	github.com/opencharly/spec v0.2026273.203
 	k8s.io/apimachinery v0.36.0
 	k8s.io/client-go v0.36.0
 )

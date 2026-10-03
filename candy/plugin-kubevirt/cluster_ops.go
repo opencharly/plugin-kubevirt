@@ -80,10 +80,9 @@ func (c *dynamicCluster) Stop(ctx context.Context, namespace, vmName string) err
 // CONFLICT-FREE by construction: a JSON MERGE PATCH sets only spec.runStrategy and
 // leaves the resourceVersion unset, so it never contends with the VM controller's
 // concurrent updates to the same object — the "the object has been modified; please
-// apply your changes to the latest version" conflict a read-modify-write Update loses
-// repeatedly (observed live on the check-kubevirt-vm R10, where the controller
-// reconciles the VM every few seconds). The patch is also idempotent: re-applying the
-// same value is a no-op at the server.
+// apply your changes to the latest version" conflict a read-modify-write Update can
+// lose under a controller that reconciles the VM. The patch is also idempotent:
+// re-applying the same value is a no-op at the server.
 func (c *dynamicCluster) updateRunStrategy(ctx context.Context, namespace, vmName, strategy string) error {
 	_, err := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace).
 		Patch(ctx, vmName, types.MergePatchType, runStrategyPatch(strategy), metav1.PatchOptions{})

@@ -4,8 +4,9 @@ go 1.26.4
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/opencharly/sdk v0.2026271.738
-	github.com/opencharly/spec v0.2026270.938
+	github.com/opencharly/sdk v0.2026273.207
+	github.com/opencharly/spec v0.2026273.203
+	google.golang.org/grpc v1.61.0
 	k8s.io/apimachinery v0.36.0
 	k8s.io/client-go v0.36.0
 )
@@ -47,7 +48,6 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231106174013-bbf56f31fb17 // indirect
-	google.golang.org/grpc v1.61.0 // indirect
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

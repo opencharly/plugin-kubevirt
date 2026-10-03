@@ -33,9 +33,45 @@ func TestContainerDiskNodeAlias(t *testing.T) {
 	}
 }
 
-// TestEnsureContainerDiskOnNode pins the delivery decision table: a container_disk
-// source with a reachable node imports only when the image is absent; every other
-// shape is a no-op.
+// TestContainerDiskDeliveryTarget pins the PURE prepare-venue call-site gate (finding B12):
+// the delivery must run ONLY for a container_disk source with a reachable node, NOT on a
+// dry-run, NOT for another source kind, NOT for an external cluster, NOT for a nil entity.
+// This is the condition at lifecycle.go's `kvPrepareVenue` call site, unit-tested without a
+// cluster.
+func TestContainerDiskDeliveryTarget(t *testing.T) {
+	node := &spec.Deploy{MemberOf: "check-kubevirt-vm"}
+	ref := "localhost/charly-check-kubevirt-vm-box:stable"
+	cd := func() *spec.KubeVirt {
+		return &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "container_disk", Image: ref}}
+	}
+	cases := []struct {
+		name        string
+		kv          *spec.KubeVirt
+		node        *spec.Deploy
+		kubeContext string
+		dryRun      bool
+		wantDeliver bool
+		wantAlias   string
+	}{
+		{"container_disk + reachable node", cd(), node, "", false, true, "charly-check-kubevirt-vm"},
+		{"dry-run never delivers", cd(), node, "", true, false, ""},
+		{"non-container_disk source", &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "data_volume"}}, node, "", false, false, ""},
+		{"empty image", &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "container_disk", Image: ""}}, node, "", false, false, ""},
+		{"nil entity", nil, node, "", false, false, ""},
+		{"external cluster (no reachable node)", cd(), nil, "prod", false, false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			alias, deliver := containerDiskDeliveryTarget(c.kv, c.node, "check-kubevirt-vm-guest", c.kubeContext, c.dryRun)
+			if deliver != c.wantDeliver || alias != c.wantAlias {
+				t.Errorf("containerDiskDeliveryTarget = (%q, %v), want (%q, %v)", alias, deliver, c.wantAlias, c.wantDeliver)
+			}
+		})
+	}
+}
+
+// TestEnsureContainerDiskOnNode pins the streaming delivery: given a resolved target, it
+// probes the node and imports ONLY when the image is absent (idempotent).
 func TestEnsureContainerDiskOnNode(t *testing.T) {
 	origPresent, origImport := containerDiskNodeImagePresent, containerDiskNodeImageImport
 	t.Cleanup(func() { containerDiskNodeImagePresent, containerDiskNodeImageImport = origPresent, origImport })
@@ -49,19 +85,14 @@ func TestEnsureContainerDiskOnNode(t *testing.T) {
 	}
 
 	host := spec.HostEnv{Home: "/home/tester"}
-	node := &spec.Deploy{MemberOf: "check-kubevirt-vm"}
 	ref := "localhost/charly-check-kubevirt-vm-box:stable"
-	kvCD := func() *spec.KubeVirt {
-		return &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "container_disk", Image: ref}}
-	}
 
 	// Absent → import.
 	containerDiskNodeImagePresent = func(_, alias, r string) (bool, error) {
 		probed = append(probed, alias+"|"+r)
 		return false, nil
 	}
-	imports = nil
-	if err := ensureContainerDiskOnNode(context.Background(), host, node, "check-kubevirt-vm-guest", "", kvCD()); err != nil {
+	if err := ensureContainerDiskOnNode(context.Background(), host, "charly-check-kubevirt-vm", ref); err != nil {
 		t.Fatalf("absent case: %v", err)
 	}
 	if len(imports) != 1 || imports[0].alias != "charly-check-kubevirt-vm" || imports[0].ref != ref {
@@ -74,38 +105,10 @@ func TestEnsureContainerDiskOnNode(t *testing.T) {
 	// Present → no import.
 	containerDiskNodeImagePresent = func(_, _, _ string) (bool, error) { return true, nil }
 	imports = nil
-	if err := ensureContainerDiskOnNode(context.Background(), host, node, "check-kubevirt-vm-guest", "", kvCD()); err != nil {
+	if err := ensureContainerDiskOnNode(context.Background(), host, "charly-check-kubevirt-vm", ref); err != nil {
 		t.Fatalf("present case: %v", err)
 	}
 	if len(imports) != 0 {
 		t.Errorf("present case must not import; got %v", imports)
-	}
-
-	// Non-container_disk source → no-op (no probe, no import).
-	containerDiskNodeImagePresent = func(_, _, _ string) (bool, error) {
-		t.Error("a non-container_disk source must not probe the node")
-		return false, nil
-	}
-	imports = nil
-	other := &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "data_volume"}}
-	if err := ensureContainerDiskOnNode(context.Background(), host, node, "check-kubevirt-vm-guest", "", other); err != nil {
-		t.Fatalf("data_volume case: %v", err)
-	}
-	if len(imports) != 0 {
-		t.Errorf("data_volume case must not import; got %v", imports)
-	}
-
-	// No reachable node (external cluster) → no-op (no probe, no import).
-	containerDiskNodeImagePresent = func(_, _, _ string) (bool, error) {
-		t.Error("an external cluster must not probe a node")
-		return false, nil
-	}
-	if err := ensureContainerDiskOnNode(context.Background(), host, nil, "theguest", "prod", kvCD()); err != nil {
-		t.Fatalf("external case: %v", err)
-	}
-
-	// nil kv → no-op.
-	if err := ensureContainerDiskOnNode(context.Background(), host, node, "x", "", nil); err != nil {
-		t.Fatalf("nil kv case: %v", err)
 	}
 }

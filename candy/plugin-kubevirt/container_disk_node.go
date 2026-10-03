@@ -55,25 +55,33 @@ func containerDiskNodeAlias(node *spec.Deploy, name, kubeContext string) string 
 	return ""
 }
 
-// ensureContainerDiskOnNode delivers kv.Source.Image into the node's containerd
-// when it is a container_disk source and the node is charly-reachable; otherwise
-// it is a no-op. Idempotent: a present image is not re-streamed.
-func ensureContainerDiskOnNode(ctx context.Context, host spec.HostEnv, node *spec.Deploy, name, kubeContext string, kv *spec.KubeVirt) error {
-	if kv == nil || kv.Source.Kind != "container_disk" || kv.Source.Image == "" {
-		return nil
+// containerDiskDeliveryTarget decides whether prepare-venue must stream a locally-built
+// containerDisk into the node before the CR is applied, and to which ssh alias. PURE (no
+// I/O) so the prepare-venue call-site gate is unit-testable: deliver is false when
+// dry-run (no cluster touched), when there is no container_disk source, or when the node
+// is not charly-reachable (an external cluster pulls from its own registry).
+func containerDiskDeliveryTarget(kv *spec.KubeVirt, node *spec.Deploy, name, kubeContext string, dryRun bool) (alias string, deliver bool) {
+	if dryRun || kv == nil || kv.Source.Kind != "container_disk" || kv.Source.Image == "" {
+		return "", false
 	}
-	alias := containerDiskNodeAlias(node, name, kubeContext)
+	alias = containerDiskNodeAlias(node, name, kubeContext)
 	if alias == "" {
-		return nil // external cluster: the node pulls the image from its registry
+		return "", false
 	}
-	present, err := containerDiskNodeImagePresent(host.Home, alias, kv.Source.Image)
+	return alias, true
+}
+
+// ensureContainerDiskOnNode streams ref into the node's containerd via alias (the target
+// decided by containerDiskDeliveryTarget). Idempotent: a present image is not re-streamed.
+func ensureContainerDiskOnNode(ctx context.Context, host spec.HostEnv, alias, ref string) error {
+	present, err := containerDiskNodeImagePresent(host.Home, alias, ref)
 	if err != nil {
 		return err
 	}
 	if present {
 		return nil
 	}
-	return containerDiskNodeImageImport(ctx, host.Home, alias, kv.Source.Image)
+	return containerDiskNodeImageImport(ctx, host.Home, alias, ref)
 }
 
 // containerDiskNodeImagePresent reports whether the node's containerd already

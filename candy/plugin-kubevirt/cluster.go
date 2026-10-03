@@ -116,18 +116,30 @@ var (
 // by self-loading the project PLUGIN-SIDE (loaderkit.ResolveKubernetesEntityViaExecutor —
 // the SAME helper candy/plugin-kube uses). A miss / empty context is a valid result: the
 // caller falls back to the kubeconfig current-context.
-func resolveClusterContext(ctx context.Context, exec *sdk.Executor, in *params.KubeVirtInput) {
+//
+// It does NOT swallow failures. The author NAMED a cluster (`in.Cluster != ""`), so a
+// resolve FAILURE is a real failure, not a legitimate miss: silently returning left
+// `in.KubeContext == ""`, the caller fell back to the kubeconfig current-context — which
+// was "" for the check-kubevirt-operator bed — and every `kubevirt:` probe died with the
+// bare `no kubeconfig context selected` (opencharly/plugin-kubevirt#8). The
+// legitimate-miss cases (no cluster named; resolved-but-empty context) still fall back
+// to the current-context in the caller; only a real resolve error is surfaced.
+func resolveClusterContext(ctx context.Context, exec *sdk.Executor, in *params.KubeVirtInput) error {
 	if exec == nil {
-		return
+		return fmt.Errorf("resolving cluster %q: no executor available", in.Cluster)
 	}
 	dir, derr := hostProjectDir(ctx, exec, "")
 	if derr != nil {
-		return
+		return fmt.Errorf("resolving the project dir to resolve cluster %q: %w", in.Cluster, derr)
 	}
 	view, verr := loaderkit.ResolveKubernetesEntityViaExecutor(ctx, exec, dir, in.Cluster)
-	if verr == nil && view != nil {
+	if verr != nil {
+		return fmt.Errorf("resolving cluster %q: %w", in.Cluster, verr)
+	}
+	if view != nil {
 		in.KubeContext = view.KubeconfigContext
 	}
+	return nil
 }
 
 // hostProjectDir resolves the project directory via the "deploy-plugins-connect" host

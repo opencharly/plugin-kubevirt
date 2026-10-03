@@ -102,7 +102,9 @@ func invokeVerb(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeReply, er
 		if err != nil {
 			return sdk.ResultJSON("fail", fmt.Sprintf("kubevirt: %s: %v", method, err))
 		}
-		resolveClusterContext(ctx, exec, &in)
+		if rerr := resolveClusterContext(ctx, exec, &in); rerr != nil {
+			return sdk.ResultJSON("fail", fmt.Sprintf("kubevirt: %s: %v (refusing to fall back to the kubeconfig current-context)", method, rerr))
+		}
 	}
 
 	conn := connFromInput(&in)

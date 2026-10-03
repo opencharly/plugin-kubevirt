@@ -96,13 +96,6 @@ func runStrategyPatch(strategy string) []byte {
 	return []byte(`{"spec":{"runStrategy":"` + strategy + `"}}`)
 }
 
-// currentRunStrategy reads a VirtualMachine's spec.runStrategy ("" when unset).
-func currentRunStrategy(obj map[string]any) string {
-	sp, _ := obj["spec"].(map[string]any)
-	s, _ := sp["runStrategy"].(string)
-	return s
-}
-
 // WaitVMIReady polls the VirtualMachineInstance's Ready condition.
 func (c *dynamicCluster) WaitVMIReady(ctx context.Context, namespace, vmName string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

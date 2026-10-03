@@ -111,7 +111,9 @@ func (g Globals) ops() (clusterOps, error) {
 	conn := g.conn()
 	if g.Cluster != "" && conn.context == "" && commandExec != nil {
 		in := &params.KubeVirtInput{Cluster: g.Cluster}
-		resolveClusterContext(commandCtx, commandExec, in)
+		if err := resolveClusterContext(commandCtx, commandExec, in); err != nil {
+			return nil, fmt.Errorf("kubevirt: %w", err)
+		}
 		conn.context = in.KubeContext
 	}
 	return newClusterOps(conn)

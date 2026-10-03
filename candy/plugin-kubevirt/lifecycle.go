@@ -202,6 +202,16 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 	}
 
+	// Self-contained containerDisk delivery: a locally-built VM box must be in the
+	// node's containerd BEFORE the CR is applied (a Never/IfNotPresent pull would
+	// otherwise fail WaitVMIReady). The gate is the pure containerDiskDeliveryTarget:
+	// false on dry-run, on a non-container_disk source, or for an external cluster.
+	if alias, deliver := containerDiskDeliveryTarget(kv, &node, p.Name, kubeContext, opts.DryRun); deliver {
+		if err := ensureContainerDiskOnNode(ctx, host, alias, kv.Source.Image); err != nil {
+			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: containerDisk delivery: %w", err)
+		}
+	}
+
 	// Render the CR and apply it. A data_volume / clone source is owned by the CR's own
 	// `dataVolumeTemplates` (KubeVirt creates + deletes the DataVolume WITH the VM), so
 	// no separate DataVolume apply happens here — one owner, one lifecycle. The

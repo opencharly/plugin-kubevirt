@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/opencharly/sdk"
@@ -75,16 +76,23 @@ func (c *dynamicCluster) Stop(ctx context.Context, namespace, vmName string) err
 	return c.updateRunStrategy(ctx, namespace, vmName, "Halted")
 }
 
+// updateRunStrategy idempotently drives a VirtualMachine to a run strategy. It is
+// CONFLICT-FREE by construction: a JSON MERGE PATCH sets only spec.runStrategy and
+// leaves the resourceVersion unset, so it never contends with the VM controller's
+// concurrent updates to the same object — the "the object has been modified; please
+// apply your changes to the latest version" conflict a read-modify-write Update can
+// lose under a controller that reconciles the VM. The patch is also idempotent:
+// re-applying the same value is a no-op at the server.
 func (c *dynamicCluster) updateRunStrategy(ctx context.Context, namespace, vmName, strategy string) error {
-	u, err := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace).Get(ctx, vmName, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	if err := setRunStrategy(u.Object, strategy); err != nil {
-		return err
-	}
-	_, err = c.dyn.Resource(gvrVirtualMachines).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
+	_, err := c.dyn.Resource(gvrVirtualMachines).Namespace(namespace).
+		Patch(ctx, vmName, types.MergePatchType, runStrategyPatch(strategy), metav1.PatchOptions{})
 	return err
+}
+
+// runStrategyPatch is the JSON merge-patch body for a run-strategy change: the ONE
+// place the patch shape is built, so it is unit-testable without a cluster.
+func runStrategyPatch(strategy string) []byte {
+	return []byte(`{"spec":{"runStrategy":"` + strategy + `"}}`)
 }
 
 // WaitVMIReady polls the VirtualMachineInstance's Ready condition.

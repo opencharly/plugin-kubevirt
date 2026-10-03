@@ -373,3 +373,52 @@ func TestRenderVirtualMachine_RequiresExclusiveGPU(t *testing.T) {
 		t.Errorf("gpus = %v", gpus)
 	}
 }
+
+// TestRenderVirtualMachine_ContainerDiskPath asserts the authored
+// source.disk_path_in_image renders the containerDisk `path` (a disk NOT at KubeVirt's
+// scanned /disk/disk.img — e.g. a charly VM box emitted at /disk.qcow2). Fails without
+// the field/render (the path key would be absent).
+func TestRenderVirtualMachine_ContainerDiskPath(t *testing.T) {
+	render := func(kv spec.KubeVirt) map[string]any {
+		obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "vm", Namespace: "default", Distro: "arch", SSHUser: "arch", SSHKey: "ssh-ed25519 AAAATEST"})
+		if err != nil {
+			t.Fatalf("RenderVirtualMachine: %v", err)
+		}
+		tmplSpec := obj["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		return tmplSpec["volumes"].([]any)[0].(map[string]any)["containerDisk"].(map[string]any)
+	}
+
+	kv := containerDiskKV()
+	kv.Source.DiskPathInImage = "/disk.qcow2"
+	if cd := render(kv); cd["path"] != "/disk.qcow2" {
+		t.Fatalf("containerDisk.path = %v, want /disk/qcow2", cd["path"])
+	}
+
+	plain := containerDiskKV()
+	if cd := render(plain); cd["path"] != nil {
+		t.Errorf("unset disk_path_in_image must not render a path; got %v", cd["path"])
+	}
+}
+
+// TestRenderVirtualMachine_RunStrategyDefaults pins the KubeVirt webhook requirement
+// (runStrategy XOR running): the schema declares #Kubevirt.run_strategy *"Always", but a
+// plain JSON decode does not carry a CUE default into the Go struct, so a template that
+// omits it arrives as "" — the renderer must still emit the schema's declared default, or
+// the emitted CR is rejected with "RunStrategy must be specified" (the check-kubevirt-vm R10).
+func TestRenderVirtualMachine_RunStrategyDefaults(t *testing.T) {
+	kv := containerDiskKV()
+	kv.RunStrategy = "" // the authoring template omitted run_strategy
+	obj, err := RenderVirtualMachine(kv, RenderOptions{
+		Name:      "charly-kv-default",
+		Namespace: "charly",
+		Distro:    "arch",
+		SSHUser:   "arch",
+		SSHKey:    "ssh-ed25519 AAAATEST",
+	})
+	if err != nil {
+		t.Fatalf("RenderVirtualMachine: %v", err)
+	}
+	if got := obj["spec"].(map[string]any)["runStrategy"]; got != "Always" {
+		t.Fatalf("runStrategy = %v, want the schema default Always", got)
+	}
+}

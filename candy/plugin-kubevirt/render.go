@@ -115,9 +115,16 @@ func RenderVirtualMachine(kv spec.KubeVirt, opts RenderOptions) (map[string]any,
 			"spec": templateSpec,
 		},
 	}
-	if kv.RunStrategy != "" {
-		specBody["runStrategy"] = kv.RunStrategy
+	// runStrategy is REQUIRED by the KubeVirt VM webhook (runStrategy XOR running). The
+	// schema declares a DEFAULT (#Kubevirt.run_strategy *"Always"), but a plain JSON decode
+	// does not carry a CUE default into the Go struct, so an authoring template that omits it
+	// arrives as "" and the emitted CR is rejected ("RunStrategy must be specified"). Honor
+	// the schema's declared default here so every emitted VirtualMachine is well-formed.
+	runStrategy := kv.RunStrategy
+	if runStrategy == "" {
+		runStrategy = "Always"
 	}
+	specBody["runStrategy"] = runStrategy
 	if kv.EvictionStrategy != "" {
 		specBody["evictionStrategy"] = kv.EvictionStrategy
 	}
@@ -281,6 +288,12 @@ func renderStorage(kv spec.KubeVirt, bootName string) (volumes []any, networks [
 		}
 		if src.PullSecret != "" {
 			cd["imagePullSecret"] = src.PullSecret
+		}
+		// A disk NOT at KubeVirt's scanned default (/disk/disk.img) — e.g. a charly VM
+		// box emitted at /disk.qcow2 — needs the explicit path; KubeVirt scans /disk
+		// and requires the single file there, so the authored path is what boots it.
+		if src.DiskPathInImage != "" {
+			cd["path"] = src.DiskPathInImage
 		}
 		volumes = append(volumes, map[string]any{"name": bootName, "containerDisk": cd})
 	case "data_volume", "clone":

@@ -439,23 +439,29 @@ type portForwarder interface {
 }
 
 // portForwardSupervisorCmd builds the detached SUPERVISOR script for the managed
-// `virtctl port-forward`. It writes `pidFile` (so the plugin can find/`Stop` it) and
-// restarts `virtctl` in a loop while it keeps exiting — keeping the ssh-stanza port
-// served for the whole `WaitForSSH` poll. Pure (testable).
+// `virtctl port-forward`. It writes `pidFile` (so the plugin can find/`Stop` it) and keeps
+// the ssh-stanza port SERVED: it starts `virtctl`, and if the port is not LISTENING within
+// 20 seconds it kills it and retries.
 //
-// Why a supervisor (plugin-kubevirt#14): `virtctl`'s forward can exit after binding
-// (apiserver port-forward churn / teardown). The old code started it exactly once, so a
-// single exit left the stanza port with NO listener for the rest of the 30-minute cap —
-// the `wait-for-sshd … :0` symptom. The loop restarts it; `setsid` detaches the whole
-// thing so it outlives the plugin subprocess.
-func portForwardSupervisorCmd(virtctl string, argv []string, pidFile, logFile string) string {
+// Why a health-check (plugin-kubevirt#14): `virtctl port-forward` started early can HANG
+// without ever binding its local port — measured live: the process is ALIVE (`Sl`) yet
+// `ss` shows no listener and the port is free, while a fresh `virtctl` on the SAME VM binds
+// and `ssh` works. A restart-on-EXIT is therefore not enough; the supervisor must
+// health-check the PORT and restart on a hang too. `setsid` detaches the whole thing so it
+// outlives the plugin subprocess. Pure (testable).
+func portForwardSupervisorCmd(virtctl string, argv []string, pidFile, logFile string, localPort int) string {
 	quoted := make([]string, 0, len(argv))
 	for _, a := range argv {
 		quoted = append(quoted, shellquote.ShellQuote(a))
 	}
-	inner := fmt.Sprintf("echo $$ >%s; while :; do %s %s >>%s 2>&1; sleep 2; done",
+	inner := fmt.Sprintf(
+		"echo $$ >%s; while :; do %s %s >>%s 2>&1 & vp=$!; ok=0; n=0; "+
+			"while [ $n -lt 20 ]; do sleep 1; n=$((n+1)); "+
+			"if ss -ltn \"sport = :%d\" 2>/dev/null | grep -q LISTEN; then ok=1; break; fi; "+
+			"kill -0 $vp 2>/dev/null || break; done; "+
+			"if [ $ok -eq 1 ]; then wait $vp; else kill $vp 2>/dev/null; sleep 2; fi; done",
 		shellquote.ShellQuote(pidFile), shellquote.ShellQuote(virtctl),
-		strings.Join(quoted, " "), shellquote.ShellQuote(logFile))
+		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), localPort)
 	return fmt.Sprintf("setsid sh -c %s >/dev/null 2>&1 & echo $! >%s",
 		shellquote.ShellQuote(inner), shellquote.ShellQuote(pidFile))
 }
@@ -478,7 +484,7 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 		return nil, err
 	}
 	logFile := filepath.Join(stateDir, "port-forward.log")
-	script := portForwardSupervisorCmd(virtctl, portForwardArgv(kubeContext, namespace, vmName, localPort), pidFile, logFile)
+	script := portForwardSupervisorCmd(virtctl, portForwardArgv(kubeContext, namespace, vmName, localPort), pidFile, logFile, localPort)
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
 		return nil, err

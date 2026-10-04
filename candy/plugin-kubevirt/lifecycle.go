@@ -413,6 +413,27 @@ func resolveVirtctl() (string, error) {
 	return "", fmt.Errorf("virtctl not found (checked $CHARLY_VIRTCTL, %s, and $PATH) — the kubevirt port-forward and the verb/CLI need a HOST-side virtctl; install layer-kubevirt on the host or set $CHARLY_VIRTCTL", managed)
 }
 
+// portForwardArgv builds the `virtctl port-forward` argv for virtctl v1.9.0, whose
+// port-forward takes POSITIONAL args:
+//
+//	virtctl port-forward <type>/<name>[/<namespace>] <localPort>[:<targetPort>]
+//
+// The older `--local-port`/`--port` flags are gone (`unknown flag: --local-port`), so
+// passing them made the port-forward die instantly — the second half of the
+// `wait-for-sshd … :0` root cause (plugin-kubevirt#11). The namespace is the `/<ns>`
+// suffix of the target; `--context` stays a GLOBAL flag. Pure; no I/O.
+func portForwardArgv(kubeContext, namespace, vmName string, localPort int) []string {
+	argv := []string{"port-forward"}
+	if kubeContext != "" {
+		argv = append(argv, "--context", kubeContext)
+	}
+	target := vmName
+	if namespace != "" {
+		target = vmName + "/" + namespace
+	}
+	return append(argv, target, strconv.Itoa(localPort)+":22")
+}
+
 // portForwarder is the managed `virtctl port-forward` handle.
 type portForwarder interface {
 	Stop() error
@@ -435,14 +456,7 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	if err != nil {
 		return nil, err
 	}
-	argv := []string{"port-forward"}
-	if kubeContext != "" {
-		argv = append(argv, "--context", kubeContext)
-	}
-	if namespace != "" {
-		argv = append(argv, "--namespace", namespace)
-	}
-	argv = append(argv, vmName, "--local-port", strconv.Itoa(localPort), "--port", "22")
+	argv := portForwardArgv(kubeContext, namespace, vmName, localPort)
 	logFile := filepath.Join(stateDir, "port-forward.log")
 	// setsid detaches into a new session so it outlives the plugin subprocess.
 	quoted := make([]string, 0, len(argv))

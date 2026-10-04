@@ -414,22 +414,21 @@ func resolveVirtctl() (string, error) {
 }
 
 // portForwardArgv builds the `virtctl port-forward` argv for virtctl v1.9.0, whose
-// port-forward takes POSITIONAL args:
+// port-forward takes POSITIONAL args with a TYPE-PREFIXED target:
 //
 //	virtctl port-forward <type>/<name>[/<namespace>] <localPort>[:<targetPort>]
 //
-// The older `--local-port`/`--port` flags are gone (`unknown flag: --local-port`), so
-// passing them made the port-forward die instantly — the second half of the
-// `wait-for-sshd … :0` root cause (plugin-kubevirt#11). The namespace is the `/<ns>`
-// suffix of the target; `--context` stays a GLOBAL flag. Pure; no I/O.
+// (a bare name → `unsupported resource type '…'`; the older `--local-port`/`--port`
+// flags → `unknown flag`). The namespace is the `/<ns>` suffix of the target;
+// `--context` stays a GLOBAL flag. Pure; no I/O.
 func portForwardArgv(kubeContext, namespace, vmName string, localPort int) []string {
 	argv := []string{"port-forward"}
 	if kubeContext != "" {
 		argv = append(argv, "--context", kubeContext)
 	}
-	target := vmName
+	target := "vm/" + vmName
 	if namespace != "" {
-		target = vmName + "/" + namespace
+		target += "/" + namespace
 	}
 	return append(argv, target, strconv.Itoa(localPort)+":22")
 }

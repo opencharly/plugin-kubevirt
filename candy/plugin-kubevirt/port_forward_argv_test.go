@@ -14,7 +14,7 @@ import (
 
 func TestPortForwardArgv_PositionalSyntax(t *testing.T) {
 	got := portForwardArgv("ctx-1", "default", "myvm", 45189)
-	want := []string{"port-forward", "--context", "ctx-1", "myvm/default", "45189:22"}
+	want := []string{"port-forward", "--context", "ctx-1", "vm/myvm/default", "45189:22"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("portForwardArgv = %v, want %v", got, want)
 	}
@@ -24,11 +24,16 @@ func TestPortForwardArgv_PositionalSyntax(t *testing.T) {
 			t.Errorf("argv must not carry the retired flag %q: %v", a, got)
 		}
 	}
+	// The target must be TYPE-PREFIXED (`vm/<name>`) — a bare name fails
+	// `unsupported resource type`.
+	if got[3] != "vm/myvm/default" {
+		t.Errorf("target must be type-prefixed; got %q", got[3])
+	}
 }
 
 func TestPortForwardArgv_NoNamespaceOrContext(t *testing.T) {
 	got := portForwardArgv("", "", "myvm", 1234)
-	want := []string{"port-forward", "myvm", "1234:22"}
+	want := []string{"port-forward", "vm/myvm", "1234:22"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("portForwardArgv = %v, want %v", got, want)
 	}

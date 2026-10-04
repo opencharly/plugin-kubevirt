@@ -471,14 +471,20 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	}
 	pid, ok := readLivePid(pidFile)
 	if !ok {
-		// Surface the detach's own log line (e.g. `setsid: failed to execute`) rather
-		// than a bare "no live pid".
-		if raw, rerr := os.ReadFile(logFile); rerr == nil && len(bytes.TrimSpace(raw)) > 0 {
-			return nil, fmt.Errorf("port-forward: process did not start (%s): %s", pidFile, strings.TrimSpace(string(raw)))
-		}
-		return nil, fmt.Errorf("port-forward: process did not start (no live pid in %s)", pidFile)
+		return nil, portForwardStartError(pidFile, logFile)
 	}
 	return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+}
+
+// portForwardStartError builds the error for a port-forward that did not come up. It
+// surfaces the detach's own log line (e.g. `setsid: failed to execute`) when the log is
+// non-empty, rather than a bare "no live pid" — the RCA's loudness requirement
+// (plugin-kubevirt#11). Pure.
+func portForwardStartError(pidFile, logFile string) error {
+	if raw, err := os.ReadFile(logFile); err == nil && len(bytes.TrimSpace(raw)) > 0 {
+		return fmt.Errorf("port-forward: process did not start (%s): %s", pidFile, strings.TrimSpace(string(raw)))
+	}
+	return fmt.Errorf("port-forward: process did not start (no live pid in %s)", pidFile)
 }
 
 // readLivePid reads a pidfile and reports whether it names a live process.

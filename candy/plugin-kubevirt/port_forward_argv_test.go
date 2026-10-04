@@ -1,6 +1,8 @@
 package kubevirt
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,5 +31,25 @@ func TestPortForwardArgv_NoNamespaceOrContext(t *testing.T) {
 	want := []string{"port-forward", "myvm", "1234:22"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("portForwardArgv = %v, want %v", got, want)
+	}
+}
+
+// TestPortForwardStartError_SurfacesLogLine pins the loudness fix: when the detach wrote
+// a log line (e.g. `setsid: failed to execute virtctl`), the error carries it — not a
+// bare "no live pid".
+func TestPortForwardStartError_SurfacesLogLine(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "port-forward.log")
+	if err := os.WriteFile(logFile, []byte("setsid: failed to execute virtctl: No such file or directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := portForwardStartError(filepath.Join(dir, "port-forward.pid"), logFile)
+	if err == nil || !strings.Contains(err.Error(), "setsid: failed to execute virtctl") {
+		t.Errorf("portForwardStartError must surface the log line; got: %v", err)
+	}
+	// No log → the bare fallback, still naming the failure.
+	err2 := portForwardStartError("pf.pid", filepath.Join(dir, "absent.log"))
+	if err2 == nil || !strings.Contains(err2.Error(), "no live pid") {
+		t.Errorf("portForwardStartError with no log must fall back to 'no live pid'; got: %v", err2)
 	}
 }

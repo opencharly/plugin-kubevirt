@@ -585,7 +585,11 @@ func runVirtctl(conn *clusterConn, in *params.KubeVirtInput, subcommand string, 
 		argv = append(argv, "--namespace", in.Namespace)
 	}
 	argv = append(argv, args...)
-	cmd := exec.Command("virtctl", argv...)
+	binary, err := resolveVirtctl()
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(binary, argv...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("virtctl %s: %w", strings.Join(argv, " "), err)

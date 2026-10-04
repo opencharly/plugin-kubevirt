@@ -1,6 +1,7 @@
 package kubevirt
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -382,6 +383,36 @@ var resolvePriorKubeVirtState = func(ctx context.Context, exec *sdk.Executor, de
 	return loadPriorKubeVirtState(ctx, exec, deployName)
 }
 
+// resolveVirtctl resolves the virtctl binary the plugin shells out to (the managed
+// port-forward and the verb/CLI arms). It honours, in order:
+//
+//  1. $CHARLY_VIRTCTL — an explicit override;
+//  2. /usr/bin/virtctl — the stable path `layer-kubevirt` installs to;
+//  3. `virtctl` on $PATH — an operator's own install.
+//
+// It returns a LOUD error when none resolve. The plugin runs HOST-side, so a
+// `virtctl` provisioned only into the venue GUEST is not reachable — the previous
+// bare `virtctl` spawn failed with `setsid: failed to execute virtctl: No such file
+// or directory` buried in port-forward.log, surfacing only as a misleading
+// `wait-for-sshd … :0` timeout 30 minutes later (plugin-kubevirt#11). Resolving up
+// front turns that into an immediate, named failure.
+func resolveVirtctl() (string, error) {
+	if p := os.Getenv("CHARLY_VIRTCTL"); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			return "", fmt.Errorf("virtctl: $CHARLY_VIRTCTL=%q: %w", p, err)
+		}
+		return p, nil
+	}
+	const managed = "/usr/bin/virtctl"
+	if _, err := os.Stat(managed); err == nil {
+		return managed, nil
+	}
+	if p, err := exec.LookPath("virtctl"); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("virtctl not found (checked $CHARLY_VIRTCTL, %s, and $PATH) — the kubevirt port-forward and the verb/CLI need a HOST-side virtctl; install layer-kubevirt on the host or set $CHARLY_VIRTCTL", managed)
+}
+
 // portForwarder is the managed `virtctl port-forward` handle.
 type portForwarder interface {
 	Stop() error
@@ -400,6 +431,10 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	if pid, ok := readLivePid(pidFile); ok {
 		return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
 	}
+	virtctl, err := resolveVirtctl()
+	if err != nil {
+		return nil, err
+	}
 	argv := []string{"port-forward"}
 	if kubeContext != "" {
 		argv = append(argv, "--context", kubeContext)
@@ -414,14 +449,19 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	for _, a := range argv {
 		quoted = append(quoted, shellquote.ShellQuote(a))
 	}
-	script := fmt.Sprintf("setsid virtctl %s >>%s 2>&1 & echo $! >%s",
-		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), shellquote.ShellQuote(pidFile))
+	script := fmt.Sprintf("setsid %s %s >>%s 2>&1 & echo $! >%s",
+		shellquote.ShellQuote(virtctl), strings.Join(quoted, " "), shellquote.ShellQuote(logFile), shellquote.ShellQuote(pidFile))
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 	pid, ok := readLivePid(pidFile)
 	if !ok {
+		// Surface the detach's own log line (e.g. `setsid: failed to execute`) rather
+		// than a bare "no live pid".
+		if raw, rerr := os.ReadFile(logFile); rerr == nil && len(bytes.TrimSpace(raw)) > 0 {
+			return nil, fmt.Errorf("port-forward: process did not start (%s): %s", pidFile, strings.TrimSpace(string(raw)))
+		}
 		return nil, fmt.Errorf("port-forward: process did not start (no live pid in %s)", pidFile)
 	}
 	return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil

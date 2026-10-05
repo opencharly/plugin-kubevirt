@@ -1,6 +1,7 @@
 package kubevirt
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,7 +78,7 @@ func invokeLifecycle(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeRepl
 	case sdk.OpArtifactKey:
 		return marshalReply(map[string]string{"key": "kubevirt:" + vmNameForDeploy(p.Name), "entity": kvEntity(p)})
 	case sdk.OpTeardownExecutor:
-		return marshalReply(spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10})
+		return marshalReply(venueDescriptor(p))
 	case sdk.OpPostTeardown:
 		return kvPostTeardown(ctx, exec, p, host)
 	case sdk.OpStart:
@@ -106,6 +107,32 @@ func vmNameForDeploy(name string) string {
 // sshAlias is the managed ssh-config alias for a deploy (the CR name).
 func sshAlias(p lifecycleParams) string {
 	return vmNameForDeploy(p.Name)
+}
+
+// venueSSHHost is the alias handed to the venue descriptor + the deploy's ssh stanza —
+// the CR name (`charly-<domain>`). Callers MUST pass this value DIRECTLY: wrapping it in
+// spec.VmSshAlias again double-prefixes it (`charly-charly-<domain>`), which no consumer
+// resolves (plugin-kubevirt#14). This named seam makes the call-site value testable.
+func venueSSHHost(p lifecycleParams) string {
+	return sshAlias(p)
+}
+
+// venueDescriptor is the ssh VenueDescriptor the framework is handed (its Host is the
+// alias ssh will resolve). Kept as a seam so the alias value the call sites actually
+// produce is testable (plugin-kubevirt#14).
+func venueDescriptor(p lifecycleParams) spec.VenueDescriptor {
+	return spec.VenueDescriptor{Kind: "ssh", Host: venueSSHHost(p), ConnectTimeout: 10}
+}
+
+// sshStanza is the managed ssh-config stanza published for a deploy (same seam).
+func sshStanza(p lifecycleParams, port int, user, keyPath string) kit.VmSshStanza {
+	return kit.VmSshStanza{
+		Alias:        venueSSHHost(p),
+		Hostname:     "127.0.0.1",
+		Port:         port,
+		User:         user,
+		IdentityFile: keyPath,
+	}
 }
 
 // kvEntity resolves the kind:kubevirt entity from the shipped node: node.From (the
@@ -240,6 +267,14 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		if err := cli.WaitAgentConnected(ctx, namespace, vmName, 5*time.Minute); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
+		// The managed port-forward dials the VMI through virt-api, which reads
+		// status.interfaces[0].ipAddress. That field is published ASYNCHRONOUSLY by
+		// virt-handler (after AgentConnected), so wait for it BEFORE starting the
+		// forward — otherwise the first connection dials an empty host and KubeVirt's
+		// proxy listener dies while virtctl lives (plugin-kubevirt#14).
+		if err := cli.WaitInterfaceIP(ctx, namespace, vmName, 5*time.Minute); err != nil {
+			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
+		}
 	}
 
 	// Managed port-forward on the auto-allocated local port. Started DETACHED (setsid +
@@ -253,20 +288,14 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	_ = pf
 
 	// Publish the managed ssh stanza + Include.
-	if err := kit.WriteVmSshStanza(host.Home, kit.VmSshStanza{
-		Alias:        kit.VmSshAlias(sshAlias(p)),
-		Hostname:     "127.0.0.1",
-		Port:         port,
-		User:         sshUser,
-		IdentityFile: sshKeyPath,
-	}); err != nil {
+	if err := kit.WriteVmSshStanza(host.Home, sshStanza(p, port, sshUser, sshKeyPath)); err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: publish ssh-config stanza: %w", err)
 	}
 	if err := kit.EnsureSshConfigInclude(host.Home); err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: ensure ssh-config include: %w", err)
 	}
 
-	ssh := kit.SSHArgs{Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10}
+	ssh := kit.SSHArgs{Host: venueSSHHost(p), ConnectTimeout: 10}
 	rr, _ := vmshared.ResolveReadiness(nil)
 	poll := func(label string) kit.PollFunc {
 		return func(pctx context.Context, cond vmshared.PollCondition) error {
@@ -312,7 +341,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	// struct is ready to carry it.
 	_ = state
 	return marshalReply(spec.PrepareVenueReply{
-		Venue: spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10},
+		Venue: venueDescriptor(p),
 		Notes: notes,
 	})
 }
@@ -382,16 +411,102 @@ var resolvePriorKubeVirtState = func(ctx context.Context, exec *sdk.Executor, de
 	return loadPriorKubeVirtState(ctx, exec, deployName)
 }
 
+// resolveVirtctl resolves the virtctl binary the plugin shells out to (the managed
+// port-forward and the verb/CLI arms). It honours, in order:
+//
+//  1. $CHARLY_VIRTCTL — an explicit override;
+//  2. /usr/bin/virtctl — the stable path `layer-kubevirt` installs to;
+//  3. `virtctl` on $PATH — an operator's own install.
+//
+// It returns a LOUD error when none resolve. The plugin runs HOST-side, so a
+// `virtctl` provisioned only into the venue GUEST is not reachable — the previous
+// bare `virtctl` spawn failed with `setsid: failed to execute virtctl: No such file
+// or directory` buried in port-forward.log, surfacing only as a misleading
+// `wait-for-sshd … :0` timeout 30 minutes later (plugin-kubevirt#11). Resolving up
+// front turns that into an immediate, named failure.
+func resolveVirtctl() (string, error) {
+	if p := os.Getenv("CHARLY_VIRTCTL"); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			return "", fmt.Errorf("virtctl: $CHARLY_VIRTCTL=%q: %w", p, err)
+		}
+		return p, nil
+	}
+	const managed = "/usr/bin/virtctl"
+	if _, err := os.Stat(managed); err == nil {
+		return managed, nil
+	}
+	if p, err := exec.LookPath("virtctl"); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("virtctl not found (checked $CHARLY_VIRTCTL, %s, and $PATH) — the kubevirt port-forward and the verb/CLI need a HOST-side virtctl; install layer-kubevirt on the host or set $CHARLY_VIRTCTL", managed)
+}
+
+// portForwardArgv builds the `virtctl port-forward` argv for virtctl v1.9.0, whose
+// port-forward takes POSITIONAL args with a TYPE-PREFIXED target:
+//
+//	virtctl port-forward <type>/<name>[/<namespace>] <localPort>[:<targetPort>]
+//
+// (a bare name → `unsupported resource type '…'`; the older `--local-port`/`--port`
+// flags → `unknown flag`). The namespace is the `/<ns>` suffix of the target;
+// `--context` stays a GLOBAL flag. Pure; no I/O.
+func portForwardArgv(kubeContext, namespace, vmName string, localPort int) []string {
+	argv := []string{"port-forward"}
+	if kubeContext != "" {
+		argv = append(argv, "--context", kubeContext)
+	}
+	target := "vm/" + vmName
+	if namespace != "" {
+		target += "/" + namespace
+	}
+	return append(argv, target, strconv.Itoa(localPort)+":22")
+}
+
 // portForwarder is the managed `virtctl port-forward` handle.
 type portForwarder interface {
 	Stop() error
 }
 
-// startVirtctlPortForward spawns a DETACHED `virtctl port-forward` bound to the deploy's
-// state dir (setsid; pidfile `port-forward.pid`; log `port-forward.log`). Detaching
+// portForwardListenTimeoutSec bounds how long the supervisor waits for a fresh virtctl
+// to bind the stanza port before killing+restarting it.
+const portForwardListenTimeoutSec = 20
+
+// portForwardSupervisorCmd builds the detached SUPERVISOR script for the managed
+// `virtctl port-forward`. It writes `pidFile` (so the plugin can find/`Stop` it) and keeps
+// the ssh-stanza port SERVED for the whole lifetime:
+//
+//   - start `virtctl`; wait up to 20s for the port to LISTEN;
+//   - once it LISTENs, keep monitoring — if the listener DISAPPEARS (KubeVirt's proxy tears
+//     the listener down on a connection error while `virtctl` stays alive) OR `virtctl`
+//     exits, kill and restart.
+//
+// Measured (plugin-kubevirt#14): `virtctl` can stay ALIVE with a DEAD listener, so a
+// restart-on-exit alone (and a one-shot health check) both miss it. `setsid` detaches the
+// whole thing so it outlives the plugin subprocess. Pure (testable).
+func portForwardSupervisorCmd(virtctl string, argv []string, pidFile, logFile string, localPort, listenTimeout int) string {
+	quoted := make([]string, 0, len(argv))
+	for _, a := range argv {
+		quoted = append(quoted, shellquote.ShellQuote(a))
+	}
+	inner := fmt.Sprintf(
+		"echo $$ >%s; while :; do %s %s >>%s 2>&1 & vp=$!; ok=0; n=0; "+
+			"while [ $n -lt %d ]; do sleep 1; n=$((n+1)); "+
+			"if ss -ltn \"sport = :%d\" 2>/dev/null | grep -q LISTEN; then ok=1; break; fi; "+
+			"kill -0 $vp 2>/dev/null || break; done; "+
+			"if [ $ok -eq 1 ]; then "+
+			"while kill -0 $vp 2>/dev/null && ss -ltn \"sport = :%d\" 2>/dev/null | grep -q LISTEN; do sleep 2; done; "+
+			"fi; "+
+			"kill $vp 2>/dev/null; sleep 2; done",
+		shellquote.ShellQuote(pidFile), shellquote.ShellQuote(virtctl),
+		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), listenTimeout, localPort, localPort)
+	return fmt.Sprintf("setsid sh -c %s >/dev/null 2>&1 & echo $! >%s",
+		shellquote.ShellQuote(inner), shellquote.ShellQuote(pidFile))
+}
+
+// startVirtctlPortForward starts a DETACHED, SUPERVISED `virtctl port-forward` bound to
+// the deploy's state dir (pidfile `port-forward.pid`; log `port-forward.log`). Detaching
 // matters: the plugin runs as a host subprocess per Invoke and exits after PrepareVenue,
 // so a child of the plugin process would be reaped when it returns. Idempotent: when the
-// pidfile names a live process, it is reused rather than a second forward started.
+// pidfile names a live supervisor, it is reused rather than a second one started.
 func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
 	if stateDir == "" {
 		return nil, fmt.Errorf("port-forward: no state dir")
@@ -400,31 +515,32 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 	if pid, ok := readLivePid(pidFile); ok {
 		return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
 	}
-	argv := []string{"port-forward"}
-	if kubeContext != "" {
-		argv = append(argv, "--context", kubeContext)
+	virtctl, err := resolveVirtctl()
+	if err != nil {
+		return nil, err
 	}
-	if namespace != "" {
-		argv = append(argv, "--namespace", namespace)
-	}
-	argv = append(argv, vmName, "--local-port", strconv.Itoa(localPort), "--port", "22")
 	logFile := filepath.Join(stateDir, "port-forward.log")
-	// setsid detaches into a new session so it outlives the plugin subprocess.
-	quoted := make([]string, 0, len(argv))
-	for _, a := range argv {
-		quoted = append(quoted, shellquote.ShellQuote(a))
-	}
-	script := fmt.Sprintf("setsid virtctl %s >>%s 2>&1 & echo $! >%s",
-		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), shellquote.ShellQuote(pidFile))
+	script := portForwardSupervisorCmd(virtctl, portForwardArgv(kubeContext, namespace, vmName, localPort), pidFile, logFile, localPort, portForwardListenTimeoutSec)
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 	pid, ok := readLivePid(pidFile)
 	if !ok {
-		return nil, fmt.Errorf("port-forward: process did not start (no live pid in %s)", pidFile)
+		return nil, portForwardStartError(pidFile, logFile)
 	}
 	return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+}
+
+// portForwardStartError builds the error for a port-forward that did not come up. It
+// surfaces the detach's own log line (e.g. `setsid: failed to execute`) when the log is
+// non-empty, rather than a bare "no live pid" — the RCA's loudness requirement
+// (plugin-kubevirt#11). Pure.
+func portForwardStartError(pidFile, logFile string) error {
+	if raw, err := os.ReadFile(logFile); err == nil && len(bytes.TrimSpace(raw)) > 0 {
+		return fmt.Errorf("port-forward: process did not start (%s): %s", pidFile, strings.TrimSpace(string(raw)))
+	}
+	return fmt.Errorf("port-forward: process did not start (no live pid in %s)", pidFile)
 }
 
 // readLivePid reads a pidfile and reports whether it names a live process.
@@ -450,6 +566,9 @@ type virtctlPortForward struct {
 
 func (p *virtctlPortForward) Stop() error {
 	if p.pid > 0 {
+		// The supervisor is a setsid session leader (its own process group), so kill
+		// the GROUP — the supervisor AND its current `virtctl` child.
+		_ = syscall.Kill(-p.pid, syscall.SIGTERM)
 		_ = syscall.Kill(p.pid, syscall.SIGTERM)
 	}
 	if p.pidFile != "" {
@@ -663,7 +782,7 @@ func kvPostTeardown(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	}
 	// Stop the managed port-forward (by pidfile under this deploy's state dir).
 	stopPortForwardByPidfile(filepath.Join(kubevirtStateBase(host.Home), vm))
-	if remaining, err := kit.RemoveVmSshStanza(host.Home, kit.VmSshAlias(sshAlias(p))); err != nil {
+	if remaining, err := kit.RemoveVmSshStanza(host.Home, venueSSHHost(p)); err != nil {
 		fmt.Fprintf(os.Stderr, "note: ssh-config stanza cleanup: %v\n", err)
 	} else if remaining == 0 {
 		if err := kit.RemoveSshConfigInclude(host.Home); err != nil {

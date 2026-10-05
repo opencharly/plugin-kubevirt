@@ -78,7 +78,7 @@ func invokeLifecycle(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeRepl
 	case sdk.OpArtifactKey:
 		return marshalReply(map[string]string{"key": "kubevirt:" + vmNameForDeploy(p.Name), "entity": kvEntity(p)})
 	case sdk.OpTeardownExecutor:
-		return marshalReply(spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10})
+		return marshalReply(spec.VenueDescriptor{Kind: "ssh", Host: sshAlias(p), ConnectTimeout: 10})
 	case sdk.OpPostTeardown:
 		return kvPostTeardown(ctx, exec, p, host)
 	case sdk.OpStart:
@@ -263,7 +263,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 
 	// Publish the managed ssh stanza + Include.
 	if err := kit.WriteVmSshStanza(host.Home, kit.VmSshStanza{
-		Alias:        kit.VmSshAlias(sshAlias(p)),
+		Alias:        sshAlias(p),
 		Hostname:     "127.0.0.1",
 		Port:         port,
 		User:         sshUser,
@@ -275,7 +275,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: ensure ssh-config include: %w", err)
 	}
 
-	ssh := kit.SSHArgs{Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10}
+	ssh := kit.SSHArgs{Host: sshAlias(p), ConnectTimeout: 10}
 	rr, _ := vmshared.ResolveReadiness(nil)
 	poll := func(label string) kit.PollFunc {
 		return func(pctx context.Context, cond vmshared.PollCondition) error {
@@ -321,7 +321,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	// struct is ready to carry it.
 	_ = state
 	return marshalReply(spec.PrepareVenueReply{
-		Venue: spec.VenueDescriptor{Kind: "ssh", Host: kit.VmSshAlias(sshAlias(p)), ConnectTimeout: 10},
+		Venue: spec.VenueDescriptor{Kind: "ssh", Host: sshAlias(p), ConnectTimeout: 10},
 		Notes: notes,
 	})
 }
@@ -758,7 +758,7 @@ func kvPostTeardown(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	}
 	// Stop the managed port-forward (by pidfile under this deploy's state dir).
 	stopPortForwardByPidfile(filepath.Join(kubevirtStateBase(host.Home), vm))
-	if remaining, err := kit.RemoveVmSshStanza(host.Home, kit.VmSshAlias(sshAlias(p))); err != nil {
+	if remaining, err := kit.RemoveVmSshStanza(host.Home, sshAlias(p)); err != nil {
 		fmt.Fprintf(os.Stderr, "note: ssh-config stanza cleanup: %v\n", err)
 	} else if remaining == 0 {
 		if err := kit.RemoveSshConfigInclude(host.Home); err != nil {

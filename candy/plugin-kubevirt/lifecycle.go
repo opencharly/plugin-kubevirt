@@ -241,6 +241,14 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		if err := cli.WaitAgentConnected(ctx, namespace, vmName, 5*time.Minute); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
+		// The managed port-forward dials the VMI through virt-api, which reads
+		// status.interfaces[0].ipAddress. That field is published ASYNCHRONOUSLY by
+		// virt-handler (after AgentConnected), so wait for it BEFORE starting the
+		// forward — otherwise the first connection dials an empty host and KubeVirt's
+		// proxy listener dies while virtctl lives (plugin-kubevirt#14).
+		if err := cli.WaitInterfaceIP(ctx, namespace, vmName, 5*time.Minute); err != nil {
+			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
+		}
 	}
 
 	// Managed port-forward on the auto-allocated local port. Started DETACHED (setsid +
@@ -440,15 +448,16 @@ type portForwarder interface {
 
 // portForwardSupervisorCmd builds the detached SUPERVISOR script for the managed
 // `virtctl port-forward`. It writes `pidFile` (so the plugin can find/`Stop` it) and keeps
-// the ssh-stanza port SERVED: it starts `virtctl`, and if the port is not LISTENING within
-// 20 seconds it kills it and retries.
+// the ssh-stanza port SERVED for the whole lifetime:
 //
-// Why a health-check (plugin-kubevirt#14): `virtctl port-forward` started early can HANG
-// without ever binding its local port — measured live: the process is ALIVE (`Sl`) yet
-// `ss` shows no listener and the port is free, while a fresh `virtctl` on the SAME VM binds
-// and `ssh` works. A restart-on-EXIT is therefore not enough; the supervisor must
-// health-check the PORT and restart on a hang too. `setsid` detaches the whole thing so it
-// outlives the plugin subprocess. Pure (testable).
+//   - start `virtctl`; wait up to 20s for the port to LISTEN;
+//   - once it LISTENs, keep monitoring — if the listener DISAPPEARS (KubeVirt's proxy tears
+//     the listener down on a connection error while `virtctl` stays alive) OR `virtctl`
+//     exits, kill and restart.
+//
+// Measured (plugin-kubevirt#14): `virtctl` can stay ALIVE with a DEAD listener, so a
+// restart-on-exit alone (and a one-shot health check) both miss it. `setsid` detaches the
+// whole thing so it outlives the plugin subprocess. Pure (testable).
 func portForwardSupervisorCmd(virtctl string, argv []string, pidFile, logFile string, localPort int) string {
 	quoted := make([]string, 0, len(argv))
 	for _, a := range argv {
@@ -459,9 +468,12 @@ func portForwardSupervisorCmd(virtctl string, argv []string, pidFile, logFile st
 			"while [ $n -lt 20 ]; do sleep 1; n=$((n+1)); "+
 			"if ss -ltn \"sport = :%d\" 2>/dev/null | grep -q LISTEN; then ok=1; break; fi; "+
 			"kill -0 $vp 2>/dev/null || break; done; "+
-			"if [ $ok -eq 1 ]; then wait $vp; else kill $vp 2>/dev/null; sleep 2; fi; done",
+			"if [ $ok -eq 1 ]; then "+
+			"while kill -0 $vp 2>/dev/null && ss -ltn \"sport = :%d\" 2>/dev/null | grep -q LISTEN; do sleep 2; done; "+
+			"fi; "+
+			"kill $vp 2>/dev/null; sleep 2; done",
 		shellquote.ShellQuote(pidFile), shellquote.ShellQuote(virtctl),
-		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), localPort)
+		strings.Join(quoted, " "), shellquote.ShellQuote(logFile), localPort, localPort)
 	return fmt.Sprintf("setsid sh -c %s >/dev/null 2>&1 & echo $! >%s",
 		shellquote.ShellQuote(inner), shellquote.ShellQuote(pidFile))
 }

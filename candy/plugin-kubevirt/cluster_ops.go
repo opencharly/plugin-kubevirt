@@ -29,6 +29,7 @@ type clusterOps interface {
 	Stop(ctx context.Context, namespace, vmName string) error
 	WaitVMIReady(ctx context.Context, namespace, vmName string, timeout time.Duration) error
 	WaitAgentConnected(ctx context.Context, namespace, vmName string, timeout time.Duration) error
+	WaitInterfaceIP(ctx context.Context, namespace, vmName string, timeout time.Duration) error
 	Status(ctx context.Context, namespace, vmName string) (string, bool, error)
 	DeleteVirtualMachine(ctx context.Context, namespace, vmName string) error
 }
@@ -126,6 +127,31 @@ func (c *dynamicCluster) WaitAgentConnected(ctx context.Context, namespace, vmNa
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timeout waiting for the guest agent on %s/%s (AgentConnected)", namespace, vmName)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// WaitInterfaceIP waits until the VMI publishes a non-empty `status.interfaces[].ipAddress`
+// — the exact field KubeVirt's virt-api port-forward dialer reads. `AgentConnected` does
+// NOT imply it (the interface status is published asynchronously by virt-handler from the
+// guest agent), so starting the managed port-forward before this is populated lets the
+// first connection dial an empty host and tear the proxy listener down (plugin-kubevirt#14).
+func (c *dynamicCluster) WaitInterfaceIP(ctx context.Context, namespace, vmName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		u, err := c.dyn.Resource(gvrVMIs).Namespace(namespace).Get(ctx, vmName, metav1.GetOptions{})
+		if err == nil {
+			if ip, ok := vmiInterfaceIP(u.Object); ok {
+				_ = ip
+				return nil
+			}
+		}
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("getting VMI %s/%s: %w", namespace, vmName, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for the VMI %s/%s interface IP", namespace, vmName)
 		}
 		time.Sleep(2 * time.Second)
 	}

@@ -210,6 +210,32 @@ func vmiAgentConnected(u map[string]any) bool {
 	return false
 }
 
+// vmiInterfaceIP returns the VMI's first non-empty interface IP — the SAME field
+// KubeVirt's virt-api dialer reads (`status.interfaces[].ipAddress`). It must be
+// populated BEFORE the managed port-forward starts: an empty IP makes virt-api dial
+// `:22` (empty host), whose error tears down the proxy listener while `virtctl` stays
+// alive — the `wait-for-sshd` 30m cap (plugin-kubevirt#14).
+func vmiInterfaceIP(u map[string]any) (string, bool) {
+	status, ok := u["status"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	list, ok := status["interfaces"].([]any)
+	if !ok {
+		return "", false
+	}
+	for _, raw := range list {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if ip, ok := m["ipAddress"].(string); ok && ip != "" {
+			return ip, true
+		}
+	}
+	return "", false
+}
+
 func runWaitReady(conn *clusterConn, op *spec.Op, in *params.KubeVirtInput) (string, error) {
 	client, err := conn.dynamicClient()
 	if err != nil {
@@ -585,7 +611,11 @@ func runVirtctl(conn *clusterConn, in *params.KubeVirtInput, subcommand string, 
 		argv = append(argv, "--namespace", in.Namespace)
 	}
 	argv = append(argv, args...)
-	cmd := exec.Command("virtctl", argv...)
+	binary, err := resolveVirtctl()
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(binary, argv...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("virtctl %s: %w", strings.Join(argv, " "), err)

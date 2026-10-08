@@ -2,6 +2,7 @@ package kubevirt
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/opencharly/spec/spec"
@@ -70,45 +71,82 @@ func TestContainerDiskDeliveryTarget(t *testing.T) {
 	}
 }
 
-// TestEnsureContainerDiskOnNode pins the streaming delivery: given a resolved target, it
-// probes the node and imports ONLY when the image is absent (idempotent).
-func TestEnsureContainerDiskOnNode(t *testing.T) {
-	origPresent, origImport := containerDiskNodeImagePresent, containerDiskNodeImageImport
-	t.Cleanup(func() { containerDiskNodeImagePresent, containerDiskNodeImageImport = origPresent, origImport })
-
-	type imp struct{ alias, ref string }
-	var imports []imp
-	var probed []string
-	containerDiskNodeImageImport = func(_ context.Context, _, alias, ref string) error {
-		imports = append(imports, imp{alias, ref})
-		return nil
+// TestContainerDiskInNodeCtr pins the in-node store verb: `sudo k3s ctr -n k8s.io`. The k8s.io
+// namespace is what the kubelet reads (plain `ctr` would be invisible to it), and k3s ships
+// its own ctr, so the sudo+k3s prefix is required. Losing either breaks the delivery.
+func TestContainerDiskInNodeCtr(t *testing.T) {
+	if !strings.Contains(containerDiskInNodeCtr, "k3s ctr") {
+		t.Errorf("containerDiskInNodeCtr = %q, want it to use k3s's own ctr", containerDiskInNodeCtr)
 	}
+	if !strings.Contains(containerDiskInNodeCtr, "-n k8s.io") {
+		t.Errorf("containerDiskInNodeCtr = %q, want the k8s.io namespace the kubelet reads", containerDiskInNodeCtr)
+	}
+}
+
+// TestEnsureContainerDiskOnNodeUsesVenue proves ensureContainerDiskOnNode drives the
+// venue-generic verified transfer rather than a bespoke probe/import pair: with the node
+// executor substituted, the venue's ctrOps probe runs `… images ls -q` in the k8s.io
+// namespace and a present image is NOT re-streamed (the verified idempotency TransferImageToVenue
+// owns). No ssh process is spawned.
+func TestEnsureContainerDiskOnNodeUsesVenue(t *testing.T) {
+	orig := containerDiskNodeExecutor
+	t.Cleanup(func() { containerDiskNodeExecutor = orig })
+
+	rec := &recExecutor{stdout: "localhost/charly-check-kubevirt-vm-box:stable\n"}
+	containerDiskNodeExecutor = func(_, _ string) spec.DeployExecutor { return rec }
 
 	host := spec.HostEnv{Home: "/home/tester"}
 	ref := "localhost/charly-check-kubevirt-vm-box:stable"
-
-	// Absent → import.
-	containerDiskNodeImagePresent = func(_, alias, r string) (bool, error) {
-		probed = append(probed, alias+"|"+r)
-		return false, nil
-	}
 	if err := ensureContainerDiskOnNode(context.Background(), host, "charly-check-kubevirt-vm", ref); err != nil {
-		t.Fatalf("absent case: %v", err)
+		t.Fatalf("ensureContainerDiskOnNode: %v", err)
 	}
-	if len(imports) != 1 || imports[0].alias != "charly-check-kubevirt-vm" || imports[0].ref != ref {
-		t.Errorf("absent case imports = %v, want one import of %s to charly-check-kubevirt-vm", imports, ref)
+	// The venue probed via the ctr verb (HasImage) — so a present image is a verified skip.
+	if !rec.sawContains("images ls -q") {
+		t.Errorf("venue did not probe via ctr images ls -q; calls=%v", rec.calls)
 	}
-	if len(probed) != 1 || probed[0] != "charly-check-kubevirt-vm|"+ref {
-		t.Errorf("absent case probed = %v, want exactly one probe of charly-check-kubevirt-vm|%s", probed, ref)
+	if rec.sawContains("import -") {
+		t.Errorf("a present image must be a verified skip, not re-imported; calls=%v", rec.calls)
 	}
+}
 
-	// Present → no import.
-	containerDiskNodeImagePresent = func(_, _, _ string) (bool, error) { return true, nil }
-	imports = nil
-	if err := ensureContainerDiskOnNode(context.Background(), host, "charly-check-kubevirt-vm", ref); err != nil {
-		t.Fatalf("present case: %v", err)
+// recExecutor is a DeployExecutor that records every command and answers RunCapture from a
+// canned stdout — enough to drive the venue's HasImage probe without spawning ssh.
+type recExecutor struct {
+	calls  []string
+	stdout string
+}
+
+func (e *recExecutor) Venue() string { return "rec://test" }
+func (e *recExecutor) RunCapture(_ context.Context, script string) (string, string, int, error) {
+	e.calls = append(e.calls, script)
+	return e.stdout, "", 0, nil
+}
+func (e *recExecutor) RunSystem(_ context.Context, script string, _ spec.EmitOpts) error {
+	e.calls = append(e.calls, "SYSTEM "+script)
+	return nil
+}
+func (e *recExecutor) RunUser(_ context.Context, script string, _ spec.EmitOpts) error {
+	e.calls = append(e.calls, "USER "+script)
+	return nil
+}
+func (e *recExecutor) RunBuilder(context.Context, spec.BuilderRunOpts) ([]byte, error) {
+	return nil, nil
+}
+func (e *recExecutor) PutFile(context.Context, string, string, uint32, bool, spec.EmitOpts) error {
+	return nil
+}
+func (e *recExecutor) GetFile(context.Context, string, bool, spec.EmitOpts) ([]byte, error) {
+	return nil, nil
+}
+func (e *recExecutor) RunInteractive(context.Context, string) (int, error) { return -1, nil }
+func (e *recExecutor) RunStream(context.Context, string) (int, error)      { return -1, nil }
+func (e *recExecutor) Kind() string                                        { return "rec" }
+func (e *recExecutor) ResolveHome(context.Context, string) (string, error) { return "/home/guest", nil }
+func (e *recExecutor) sawContains(sub string) bool {
+	for _, c := range e.calls {
+		if strings.Contains(c, sub) {
+			return true
+		}
 	}
-	if len(imports) != 0 {
-		t.Errorf("present case must not import; got %v", imports)
-	}
+	return false
 }

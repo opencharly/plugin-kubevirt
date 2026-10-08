@@ -102,11 +102,13 @@ func ensureContainerDiskOnNode(ctx context.Context, host spec.HostEnv, alias, re
 		containerDiskInNodeCtr,
 		func() *exec.Cmd {
 			// The HOST-side load reader: a real ssh process that feeds the `save` stream on
-			// stdin to the node's `k3s ctr … images import -`. The venue's Exec (an SSHExecutor)
-			// runs the probe/tag/remove in the SAME node store, so load and verification cannot
-			// address different stores.
-			return exec.CommandContext(ctx, "ssh", "-F", kit.SshConfigPath(host.Home), alias,
-				"sudo", "k3s", "ctr", "-n", "k8s.io", "images", "import", "-")
+			// stdin to the node's `… ctr … images import -`. Its store scope is DERIVED from
+			// containerDiskInNodeCtr — the SAME constant the venue's probe/tag/remove use — so
+			// the load and the verification cannot address different stores (a future change to
+			// the constant moves both together; the invariant the comment states is true).
+			argv := append([]string{"-F", kit.SshConfigPath(host.Home), alias}, strings.Fields(containerDiskInNodeCtr)...)
+			argv = append(argv, "images", "import", "-")
+			return exec.CommandContext(ctx, "ssh", argv...)
 		},
 		"containerDisk",
 	)

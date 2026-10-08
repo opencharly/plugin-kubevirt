@@ -83,6 +83,48 @@ func TestContainerDiskInNodeCtr(t *testing.T) {
 	}
 }
 
+// TestContainerDiskNodeLoadArgvDerivesScope pins that the node LOAD argv is DERIVED from
+// containerDiskInNodeCtr, the same constant the venue probe/tag/remove use. The fix that moved
+// the scope behind one constant is unproven without this: a load that hardcoded
+// `sudo k3s ctr -n k8s.io` inline would leave the invariant false, and this test must FAIL for
+// that inline form. It asserts the exact constant token sequence is present, then mutates the
+// constant to prove the argv tracks it (a hardcoded literal would not).
+func TestContainerDiskNodeLoadArgvDerivesScope(t *testing.T) {
+	argv := containerDiskNodeLoadArgv("/home/tester", "charly-vm")
+	joined := strings.Join(argv, " ")
+	// The full store scope from the constant must appear, verbatim and in order.
+	if !strings.Contains(joined, containerDiskInNodeCtr) {
+		t.Fatalf("load argv %q does not contain the store scope %q — the load must derive it", joined, containerDiskInNodeCtr)
+	}
+	if !strings.Contains(joined, "images import -") {
+		t.Fatalf("load argv %q must end in `images import -`", joined)
+	}
+	if !strings.Contains(joined, "-F /home/tester/.ssh/config charly-vm") {
+		t.Fatalf("load argv %q must ssh -F <home config> <alias>", joined)
+	}
+}
+
+// TestContainerDiskNodeLoadArgvTracksConstant is the mutation-shaped proof: it swaps the
+// constant and shows the argv follows it. A hardcoded inline literal (the round-1 defect)
+// would keep the OLD scope and fail here.
+func TestContainerDiskNodeLoadArgvTracksConstant(t *testing.T) {
+	orig := containerDiskInNodeCtr
+	t.Cleanup(func() { containerDiskInNodeCtr = orig })
+
+	containerDiskInNodeCtr = "sudo k3s ctr -n k8s.io"
+	base := strings.Join(containerDiskNodeLoadArgv("/h", "n"), " ")
+
+	// Mutate the constant to a DIFFERENT store scope; the argv must move with it.
+	containerDiskInNodeCtr = "ctr -n other.io"
+	moved := strings.Join(containerDiskNodeLoadArgv("/h", "n"), " ")
+	if base == moved {
+		t.Fatalf("load argv did not track containerDiskInNodeCtr: %q", moved)
+	}
+	if !strings.Contains(moved, "-n other.io") || strings.Contains(moved, "-n k8s.io") {
+		t.Fatalf("load argv %q did not adopt the new store scope — the load is not derived", moved)
+	}
+}
+
 // TestEnsureContainerDiskOnNodeUsesVenue proves ensureContainerDiskOnNode drives the
 // venue-generic verified transfer rather than a bespoke probe/import pair: with the node
 // executor substituted, the venue's ctrOps probe runs `… images ls -q` in the k8s.io

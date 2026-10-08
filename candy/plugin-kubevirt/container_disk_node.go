@@ -76,7 +76,7 @@ func containerDiskDeliveryTarget(kv *spec.KubeVirt, node *spec.Deploy, name, kub
 // reads (plain `ctr` defaults to `default` and would be invisible to the kubelet). It is the
 // ONE place this venue's store scope is decided — the probe, tag, removal and load all go
 // through it, so they can never address a different store.
-const containerDiskInNodeCtr = "sudo k3s ctr -n k8s.io"
+var containerDiskInNodeCtr = "sudo k3s ctr -n k8s.io"
 
 // containerDiskNodeExecutor builds the venue transport: an SSH DeployExecutor to the
 // charly-managed k3s node, reading the managed ssh_config fragment (the `-F` the retired
@@ -84,6 +84,17 @@ const containerDiskInNodeCtr = "sudo k3s ctr -n k8s.io"
 // spawning ssh.
 var containerDiskNodeExecutor = func(home, alias string) spec.DeployExecutor {
 	return &specexec.SSHExecutor{Host: alias, Args: []string{"-F", kit.SshConfigPath(home)}}
+}
+
+// containerDiskNodeLoadArgv builds the HOST-side ssh argv that feeds the `save` stream on
+// stdin to the node's `… ctr … images import -`. Its store scope is DERIVED from
+// containerDiskInNodeCtr — the SAME constant the venue's probe/tag/remove use — so the load
+// and the verification cannot address different stores (a future change to the constant moves
+// both together). Pure, so the derivation is unit-pinned.
+func containerDiskNodeLoadArgv(home, alias string) []string {
+	argv := []string{"-F", kit.SshConfigPath(home), alias}
+	argv = append(argv, strings.Fields(containerDiskInNodeCtr)...)
+	return append(argv, "images", "import", "-")
 }
 
 // ensureContainerDiskOnNode streams ref into the node's containerd via alias (the target
@@ -101,14 +112,7 @@ func ensureContainerDiskOnNode(ctx context.Context, host spec.HostEnv, alias, re
 		nodeExec,
 		containerDiskInNodeCtr,
 		func() *exec.Cmd {
-			// The HOST-side load reader: a real ssh process that feeds the `save` stream on
-			// stdin to the node's `… ctr … images import -`. Its store scope is DERIVED from
-			// containerDiskInNodeCtr — the SAME constant the venue's probe/tag/remove use — so
-			// the load and the verification cannot address different stores (a future change to
-			// the constant moves both together; the invariant the comment states is true).
-			argv := append([]string{"-F", kit.SshConfigPath(host.Home), alias}, strings.Fields(containerDiskInNodeCtr)...)
-			argv = append(argv, "images", "import", "-")
-			return exec.CommandContext(ctx, "ssh", argv...)
+			return exec.CommandContext(ctx, "ssh", containerDiskNodeLoadArgv(host.Home, alias)...)
 		},
 		"containerDisk",
 	)

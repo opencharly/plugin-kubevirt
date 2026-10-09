@@ -6,34 +6,34 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/opencharly/sdk/deploykit"
 	"github.com/opencharly/sdk/kit"
 	"github.com/opencharly/spec/container"
+	specexec "github.com/opencharly/spec/exec"
 	"github.com/opencharly/spec/spec"
 )
 
-// container_disk_node.go — the SELF-CONTAINED containerDisk delivery for a
-// kind:kubevirt member.
+// container_disk_node.go — the containerDisk delivery for a kind:kubevirt member, expressed
+// through the VENUE-GENERIC verified transfer.
 //
-// A `container_disk.image` may be a locally-built charly VM box that exists only
-// in the host engine store; the k3s NODE's containerd has never seen it, so a
-// `WaitVMIReady` with `imagePullPolicy: Never`/`IfNotPresent` would fail. Before
-// the member applies its VirtualMachine CR, this ensures the image is present in
-// the node's containerd by STREAMING it host-side — the SAME `save | import`
-// discipline every other delivery path uses (spec/container.StreamLoad):
+// A `container_disk.image` may be a locally-built charly VM box that exists only in the host
+// engine store; the k3s NODE's containerd has never seen it, so a `WaitVMIReady` with
+// `imagePullPolicy: Never`/`IfNotPresent` would fail. Before the member applies its
+// VirtualMachine CR, this ensures the image is present in the node's containerd.
 //
-//	podman save <ref> | ssh <node-alias> 'sudo k3s ctr -n k8s.io images import -'
+// This used to be a SELF-CONTAINED probe+`StreamLoad` pair (its own `ctr images ls -q` and
+// `podman save | ssh ... ctr images import -`). It is now a thin CONSUMER of the one shared
+// path — `deploykit.TransferImageToVenue` over `deploykit.NewNodeVenue` (sdk v0.2026280.1341)
+// — the SAME verified idempotency, torn-overlay recovery and tag that `charly box load` and
+// `charly vm cp-box` run. R3: one delivery implementation for every node/venue, not a third.
 //
-// The namespace is `k8s.io` — the CRI namespace the kubelet reads; plain `ctr`
-// defaults to `default` and would be invisible to the kubelet.
-//
-// The node is the member's PARENT (a peer/group member): `node.MemberOf` carries
-// the folded owner key (the loader stamps it), so the managed ssh alias is
-// `charly-<domain>`. When the member has no charly-managed node parent (an
-// external cluster), the image must come from a registry and this delivery is
-// SKIPPED cleanly.
+// The node is the member's PARENT (a peer/group member): `node.MemberOf` carries the folded
+// owner key (the loader stamps it), so the managed ssh alias is `charly-<domain>`. When the
+// member has no charly-managed node parent (an external cluster), the image must come from a
+// registry and this delivery is SKIPPED cleanly.
 
-// containerDiskNodeAlias names the k3s node's managed ssh alias for a kubevirt
-// member. It returns "" when the node is not a charly-managed VM.
+// containerDiskNodeAlias names the k3s node's managed ssh alias for a kubevirt member. It
+// returns "" when the node is not a charly-managed VM.
 func containerDiskNodeAlias(node *spec.Deploy, name, kubeContext string) string {
 	owner := ""
 	if node != nil && node.MemberOf != "" {
@@ -71,46 +71,52 @@ func containerDiskDeliveryTarget(kv *spec.KubeVirt, node *spec.Deploy, name, kub
 	return alias, true
 }
 
+// containerDiskInNodeCtr is the in-node containerd verb prefix. k3s ships its OWN ctr, so the
+// node's CRI store is reached with `sudo k3s ctr`; `-n k8s.io` is the namespace the kubelet
+// reads (plain `ctr` defaults to `default` and would be invisible to the kubelet). It is the
+// ONE place this venue's store scope is decided — the probe, tag, removal and load all go
+// through it, so they can never address a different store.
+var containerDiskInNodeCtr = "sudo k3s ctr -n k8s.io"
+
+// containerDiskNodeExecutor builds the venue transport: an SSH DeployExecutor to the
+// charly-managed k3s node, reading the managed ssh_config fragment (the `-F` the retired
+// bespoke path passed by hand). Package var so a test can substitute a recorder without
+// spawning ssh.
+var containerDiskNodeExecutor = func(home, alias string) spec.DeployExecutor {
+	return &specexec.SSHExecutor{Host: alias, Args: []string{"-F", kit.SshConfigPath(home)}}
+}
+
+// containerDiskNodeLoadArgv builds the HOST-side ssh argv that feeds the `save` stream on
+// stdin to the node's `… ctr … images import -`. Its store scope is DERIVED from
+// containerDiskInNodeCtr — the SAME constant the venue's probe/tag/remove use — so the load
+// and the verification cannot address different stores (a future change to the constant moves
+// both together). Pure, so the derivation is unit-pinned.
+func containerDiskNodeLoadArgv(home, alias string) []string {
+	argv := []string{"-F", kit.SshConfigPath(home), alias}
+	argv = append(argv, strings.Fields(containerDiskInNodeCtr)...)
+	return append(argv, "images", "import", "-")
+}
+
 // ensureContainerDiskOnNode streams ref into the node's containerd via alias (the target
-// decided by containerDiskDeliveryTarget). Idempotent: a present image is not re-streamed.
+// decided by containerDiskDeliveryTarget), through the venue-generic verified transfer: a
+// deploykit.NewNodeVenue whose ctrOps probes with `... ctr -n k8s.io images ls -q` (verified
+// idempotency) and whose load streams `podman save <ref>` over SSH into
+// `... ctr -n k8s.io images import -` — no fork of TransferImageToVenue.
 func ensureContainerDiskOnNode(ctx context.Context, host spec.HostEnv, alias, ref string) error {
-	present, err := containerDiskNodeImagePresent(host.Home, alias, ref)
-	if err != nil {
-		return err
-	}
-	if present {
-		return nil
-	}
-	return containerDiskNodeImageImport(ctx, host.Home, alias, ref)
-}
-
-// containerDiskNodeImagePresent reports whether the node's containerd already
-// holds ref (in the kubelet's k8s.io namespace). Package var (test seam).
-var containerDiskNodeImagePresent = func(home, alias, ref string) (bool, error) {
-	out, err := exec.Command("ssh", "-F", kit.SshConfigPath(home), alias,
-		"sudo", "k3s", "ctr", "-n", "k8s.io", "images", "ls", "-q").Output()
-	if err != nil {
-		return false, fmt.Errorf("probing node %q containerd: %w", alias, err)
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) == ref {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// containerDiskNodeImageImport streams ref from the host engine store into the
-// node's containerd. Package var (test seam).
-var containerDiskNodeImageImport = func(ctx context.Context, home, alias, ref string) error {
-	engine := "podman"
+	nodeExec := containerDiskNodeExecutor(host.Home, alias)
+	hostEngine := "podman"
 	if rt, rerr := kit.ResolveRuntime(); rerr == nil && rt.RunEngine != "" {
-		engine = rt.RunEngine
+		hostEngine = rt.RunEngine
 	}
-	save := exec.CommandContext(ctx, container.EngineBinary(engine), "save", ref)
-	load := exec.CommandContext(ctx, "ssh", "-F", kit.SshConfigPath(home), alias,
-		"sudo", "k3s", "ctr", "-n", "k8s.io", "images", "import", "-")
-	if err := container.StreamLoad(save, load); err != nil {
+	venue := deploykit.NewNodeVenue(
+		nodeExec,
+		containerDiskInNodeCtr,
+		func() *exec.Cmd {
+			return exec.CommandContext(ctx, "ssh", containerDiskNodeLoadArgv(host.Home, alias)...)
+		},
+		"containerDisk",
+	)
+	if err := deploykit.TransferImageToVenue(ctx, venue, container.EngineBinary(hostEngine), ref, "", deploykit.EmitOpts{}); err != nil {
 		return fmt.Errorf("delivering %s into node %q containerd: %w", ref, alias, err)
 	}
 	return nil

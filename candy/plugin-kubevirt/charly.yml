@@ -155,6 +155,7 @@ check-kubevirt-skill:
             subcommand** — you author a `kubevirt:` step inside a candy/box plan and run it
             with `charly check live <image> --filter kubevirt` or `charly check run <bed>`.
             It is the cluster-probe twin of the `kube:` verb, for the KubeVirt + CDI CRs.
+            Full detail: references/live-probe-verbs.md.
 
             ## Method surface
 

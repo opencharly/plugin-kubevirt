@@ -338,10 +338,10 @@ func renderInterfaces(kv spec.KubeVirt) []any {
 // renderCloudInitVolume builds the cloudInitNoCloud volume from the shared renderer.
 func renderCloudInitVolume(kv spec.KubeVirt, opts RenderOptions) (map[string]any, error) {
 	if opts.Distro == "" {
-		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest distro could not be resolved (the shared cloud-init renderer needs a distro id to emit the sshd unit; declare it on the containerDisk VM box, or drop cloud_init on a source whose distro cannot be read)")
+		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest distro could not be resolved (the shared cloud-init renderer needs a distro id to emit the sshd unit; declare `distro` on the entity, or use a containerDisk VM box whose ai.opencharly.vm.box labels carry it)")
 	}
 	if opts.SSHUser == "" {
-		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest ssh user could not be resolved (cloud-init would authorise no key and the guest would be unreachable; declare ssh_user on the containerDisk VM box)")
+		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest ssh user could not be resolved (cloud-init would authorise no key and the guest would be unreachable; declare `ssh_user` on the entity, or use a containerDisk VM box whose labels carry it)")
 	}
 	userData, metaData, networkConfig, err := renderCloudInit(kv, opts)
 	if err != nil {

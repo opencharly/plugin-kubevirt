@@ -175,10 +175,11 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: resolve entity %q: %w", entity, err)
 	}
-	kubeContext, err := resolveKubeContext(ctx, exec, p.Dir, kv)
+	target, err := resolveKubeContext(ctx, exec, p.Dir, kv)
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: resolve cluster: %w", err)
 	}
+	kubeContext := target.context
 	namespace := kv.Namespace
 	if namespace == "" {
 		namespace = "default"
@@ -223,7 +224,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		port = alloc
 	}
 
-	conn := &clusterConn{context: kubeContext}
+	conn := target.conn()
 	cli, err := newClusterOps(conn)
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
@@ -281,7 +282,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	// pidfile under the deploy's state dir) so it survives this plugin subprocess's
 	// lifetime; PostTeardown stops it by pidfile. Idempotent: a live forward on the
 	// persisted port is reused.
-	pf, err := newPortForwarder(ctx, kubeContext, namespace, vmName, port, stateDir)
+	pf, err := newPortForwarder(ctx, target, namespace, vmName, port, stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: start port-forward: %w", err)
 	}
@@ -367,23 +368,40 @@ func charlyInstallStrategy(kv *spec.KubeVirt) string {
 	return ""
 }
 
-// resolveGuestIdentity resolves the guest distro + ssh user for the entity. For a
-// containerDisk the distro comes from the VM box's OCI metadata
-// (deploykit.VmCapabilitiesFromLabels); the ssh user from the box metadata's SSHUser.
-// Other source kinds must carry their own cloud_init and are rejected when neither the
-// box metadata nor an explicit value resolves.
+// resolveGuestIdentity resolves the guest distro + ssh user for the entity. An explicit
+// `distro`/`ssh_user` on the entity WINS — the only way a source that carries no VM-box
+// metadata can declare them, because data_volume / pvc / clone are bare disks. A
+// containerDisk otherwise reads the pair from the VM box's OCI labels
+// (deploykit.VmCapabilitiesFromLabels). A source for which NEITHER resolves is an error: the
+// shared cloud-init renderer needs the distro to emit the right sshd unit and the user to
+// authorise a key, so the guest would otherwise boot unreachable.
 func resolveGuestIdentity(kv *spec.KubeVirt, _ string) (distro, sshUser string, err error) {
+	distro, sshUser = kv.Distro, kv.SSHUser
 	if kv.Source.Kind == "container_disk" {
-		meta, merr := resolveVmBoxMetadata(kv.Source.Image)
-		if merr == nil && meta != nil {
-			return meta.Distro, meta.SSHUser, nil
+		if meta, merr := resolveVmBoxMetadata(kv.Source.Image); merr == nil && meta != nil {
+			if distro == "" {
+				distro = meta.Distro
+			}
+			if sshUser == "" {
+				sshUser = meta.SSHUser
+			}
 		}
 	}
-	// Non-containerDisk, or unreadable box metadata: require an explicit cloud_init.
-	if kv.CloudInit == nil {
-		return "", "", fmt.Errorf("the kubevirt source %q has no VM-box metadata; a deploy needs a containerDisk VM box (distro + ssh user) or an explicit cloud_init", kv.Source.Kind)
+	if distro == "" || sshUser == "" {
+		var missing []string
+		if distro == "" {
+			missing = append(missing, "distro")
+		}
+		if sshUser == "" {
+			missing = append(missing, "ssh_user")
+		}
+		how := "declare " + strings.Join(missing, " + ") + " on the entity"
+		if kv.Source.Kind == "container_disk" {
+			how += ", or use a VM box whose ai.opencharly.vm.box labels carry them"
+		}
+		return "", "", fmt.Errorf("the kubevirt source %q has no guest identity: %s", kv.Source.Kind, how)
 	}
-	return "", "", fmt.Errorf("the kubevirt source %q needs an explicit guest distro + ssh user (not yet carried by #KubeVirt); use a containerDisk VM box", kv.Source.Kind)
+	return distro, sshUser, nil
 }
 
 // --- injectable seams (test stubs) -------------------------------------------
@@ -402,8 +420,8 @@ var resolveVmBoxMetadata = func(imageRef string) (*spec.VmBoxMetadata, error) {
 var newClusterOps = func(conn *clusterConn) (clusterOps, error) { return newDynamicCluster(conn) }
 
 // newPortForwarder starts a managed `virtctl port-forward`. Package var (test seam).
-var newPortForwarder = func(ctx context.Context, kubeContext, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
-	return startVirtctlPortForward(ctx, kubeContext, namespace, vmName, localPort, stateDir)
+var newPortForwarder = func(ctx context.Context, target clusterTarget, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
+	return startVirtctlPortForward(ctx, target, namespace, vmName, localPort, stateDir)
 }
 
 // resolvePriorKubeVirtState reads a deploy's persisted KubeVirtDeployState.
@@ -449,16 +467,23 @@ func resolveVirtctl() (string, error) {
 // (a bare name → `unsupported resource type '…'`; the older `--local-port`/`--port`
 // flags → `unknown flag`). The namespace is the `/<ns>` suffix of the target;
 // `--context` stays a GLOBAL flag. Pure; no I/O.
-func portForwardArgv(kubeContext, namespace, vmName string, localPort int) []string {
+func portForwardArgv(target clusterTarget, namespace, vmName string, localPort int) []string {
 	argv := []string{"port-forward"}
-	if kubeContext != "" {
-		argv = append(argv, "--context", kubeContext)
+	// --kubeconfig and --context are both GLOBAL virtctl flags, and the file must be named
+	// explicitly: on an externally-managed cluster the resolved file is a per-cluster
+	// kubeconfig the ambient $KUBECONFIG never points at, so omitting it would have virtctl
+	// dial whatever cluster the current-context happens to name.
+	if target.kubeconfig != "" {
+		argv = append(argv, "--kubeconfig", target.kubeconfig)
 	}
-	target := "vm/" + vmName
+	if target.context != "" {
+		argv = append(argv, "--context", target.context)
+	}
+	target0 := "vm/" + vmName
 	if namespace != "" {
-		target += "/" + namespace
+		target0 += "/" + namespace
 	}
-	return append(argv, target, strconv.Itoa(localPort)+":22")
+	return append(argv, target0, strconv.Itoa(localPort)+":22")
 }
 
 // portForwarder is the managed `virtctl port-forward` handle.
@@ -507,7 +532,7 @@ func portForwardSupervisorCmd(virtctl string, argv []string, pidFile, logFile st
 // matters: the plugin runs as a host subprocess per Invoke and exits after PrepareVenue,
 // so a child of the plugin process would be reaped when it returns. Idempotent: when the
 // pidfile names a live supervisor, it is reused rather than a second one started.
-func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
+func startVirtctlPortForward(ctx context.Context, target clusterTarget, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
 	if stateDir == "" {
 		return nil, fmt.Errorf("port-forward: no state dir")
 	}
@@ -520,7 +545,7 @@ func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName
 		return nil, err
 	}
 	logFile := filepath.Join(stateDir, "port-forward.log")
-	script := portForwardSupervisorCmd(virtctl, portForwardArgv(kubeContext, namespace, vmName, localPort), pidFile, logFile, localPort, portForwardListenTimeoutSec)
+	script := portForwardSupervisorCmd(virtctl, portForwardArgv(target, namespace, vmName, localPort), pidFile, logFile, localPort, portForwardListenTimeoutSec)
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
 		return nil, err

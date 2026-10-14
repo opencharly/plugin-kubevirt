@@ -151,6 +151,44 @@ func TestValidateKubeVirtDeep(t *testing.T) {
 				"instancetype": "u1.medium",
 			},
 		},
+		{
+			// The guest-identity presence rule (schema/kubevirt.cue delegates it here): a
+			// source with no VM-box metadata must declare the pair, or the shared cloud-init
+			// renderer emits no sshd unit and authorises no key.
+			name:      "data_volume without guest identity",
+			body:      map[string]any{"source": map[string]any{"kind": "data_volume", "data_volume": map[string]any{"http": map[string]any{"url": "https://example.com/x.img"}}, "size": "30Gi"}},
+			wantPaths: []string{"distro"},
+		},
+		{
+			name: "data_volume with guest identity clean",
+			body: map[string]any{
+				"source":   map[string]any{"kind": "data_volume", "data_volume": map[string]any{"http": map[string]any{"url": "https://example.com/x.img"}}, "size": "30Gi"},
+				"distro":   "ubuntu",
+				"ssh_user": "ubuntu",
+			},
+		},
+		{
+			name: "pvc with distro but no ssh user",
+			body: map[string]any{
+				"source": map[string]any{"kind": "pvc", "pvc": "golden"},
+				"distro": "ubuntu",
+			},
+			wantPaths: []string{"ssh_user"},
+		},
+		{
+			name: "unknown distro id",
+			body: map[string]any{
+				"source":   map[string]any{"kind": "clone", "clone": map[string]any{"from": "golden"}},
+				"distro":   "not-a-distro",
+				"ssh_user": "ubuntu",
+			},
+			wantPaths: []string{"distro"},
+		},
+		{
+			// A containerDisk needs no explicit pair: its box labels carry it.
+			name: "container_disk without an explicit pair is clean",
+			body: map[string]any{"source": map[string]any{"kind": "container_disk", "image": "x"}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

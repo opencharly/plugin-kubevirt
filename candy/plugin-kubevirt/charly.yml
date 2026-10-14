@@ -1,7 +1,7 @@
 plugin-kubevirt:
     candy:
         description: |-
-            OUT-OF-TREE charly plugin owning ALL KubeVirt interaction: the 6th deploy
+            OUT-OF-TREE charly plugin owning ALL KubeVirt interaction: the 7th deploy
             SUBSTRATE (`kind:kubevirt` template + `kubevirt:`/`target: kubevirt` deploy),
             the declarative `kubevirt:` cluster-probe check VERB, and the
             `charly kubevirt` CLI family — a standalone Go module (go.mod + main.go) that

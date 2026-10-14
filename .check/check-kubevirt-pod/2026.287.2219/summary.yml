@@ -1,0 +1,201 @@
+bed: check-kubevirt-pod
+calver: 2026.287.2219
+driver: /home/atrawog/Sync/Atrapub/no/dsh/opencharly/charly/bin/charly
+driver_version: 2026.286.0739
+driver_size: 52832269
+driver_mtime: 2026-10-14T17:48:56Z
+runner_stderr: runner.stderr.log
+steps:
+  - name: image-build
+    duration_seconds: 14
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      cache_hits: 3
+      cache_steps: 17
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: check-image
+    duration_seconds: 26
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: deploy-add
+    duration_seconds: 12
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: config
+    duration_seconds: 9
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: start
+    duration_seconds: 7
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: bring-up-members
+    duration_seconds: 0
+    ok: true
+  - name: check-live
+    duration_seconds: 10
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: feature-run
+    duration_seconds: 7
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: update
+    duration_seconds: 50
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 5
+      findings:
+        - severity: warning
+          count: 5
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: rebuild-ready
+    duration_seconds: 1
+    ok: true
+  - name: check-live-rebuild
+    duration_seconds: 7
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: feature-run-rebuild
+    duration_seconds: 7
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: cleanup
+    duration_seconds: 14
+    ok: true
+    diagnostics:
+      errors: 0
+      warnings: 0
+      advisories: 0
+      allowlisted: 1
+      findings:
+        - severity: warning
+          count: 1
+          pattern: severity-prefix
+          first_line: 1
+          allowlisted: dev-worktree-binary-notice
+          text: "WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different c…"
+  - name: cleanup-members
+    duration_seconds: 0
+    ok: true
+total_seconds: 164
+diagnostics:
+  errors: 0
+  warnings: 0
+  advisories: 0
+  allowlisted: 15
+  errors_fatal: true
+  warnings_fatal: false
+  advisories_fatal: false
+  cache_hits: 3
+  cache_steps: 17
+  allowlist_used:
+    - id: dev-worktree-binary-notice
+      severity: warning
+      suppressed: 15
+      why: "A dev/worktree charly binary (the in-development build every charly check bed installs via the charly-dev candy) is not at the FHS location that owns /usr/lib/charly/plugins, so it deliberately skips the installed package's plugins (built against a different charly version, issue #328) and says so once per process. Observed live in every check-charly-vm step log when the host has a packaged charly install. Informational dev-build behavior — not an error; suppressing it would mean silently loading plugins built against a different API version."
+ok: true

@@ -163,6 +163,24 @@ func kubevirtStateBase(hostHome string) string {
 // AgentConnected, start the managed port-forward, publish the ssh stanza, wait for
 // sshd + cloud-init, ensure charly is in the guest, and return the guest SSH venue
 // descriptor + the KubeVirtDeployState patch.
+// Venue wait bounds. MEASURED on a disposable bed (2026-10-14): a NESTED KubeVirt guest —
+// a VM inside the venue's own cluster VM — took ~14 minutes from VM start to AgentConnected,
+// while these bounds allowed 5. The rebuild leg of that bed then failed on a timeout that had
+// nothing to do with the change under test:
+//
+//	plugin-kubevirt prepare-venue: timeout waiting for the guest agent on default/<vm>-guest (AgentConnected)
+//
+// They are floors for a nested venue, not guesses: virt-handler publishes
+// status.interfaces[].ipAddress only AFTER AgentConnected, so the IP bound has to clear the
+// agent bound rather than run beside it. The venue path cannot see authored vars
+// (lifecycleParams carries none), so a venue cannot tune these yet; that gap is filed as
+// plugin-kubevirt#28 rather than papered over with a magic number here.
+const (
+	venueVMIReadyWait = 15 * time.Minute
+	venueAgentWait    = 20 * time.Minute
+	venueIPWait       = 10 * time.Minute
+)
+
 func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, host spec.HostEnv) (*pb.InvokeReply, error) {
 	var node spec.Deploy
 	if err := json.Unmarshal(p.Node, &node); err != nil {
@@ -262,10 +280,10 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		if err := cli.EnsureRunning(ctx, namespace, vmName); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: ensure running: %w", err)
 		}
-		if err := cli.WaitVMIReady(ctx, namespace, vmName, 10*time.Minute); err != nil {
+		if err := cli.WaitVMIReady(ctx, namespace, vmName, venueVMIReadyWait); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
-		if err := cli.WaitAgentConnected(ctx, namespace, vmName, 5*time.Minute); err != nil {
+		if err := cli.WaitAgentConnected(ctx, namespace, vmName, venueAgentWait); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
 		// The managed port-forward dials the VMI through virt-api, which reads
@@ -273,7 +291,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		// virt-handler (after AgentConnected), so wait for it BEFORE starting the
 		// forward — otherwise the first connection dials an empty host and KubeVirt's
 		// proxy listener dies while virtctl lives (plugin-kubevirt#14).
-		if err := cli.WaitInterfaceIP(ctx, namespace, vmName, 5*time.Minute); err != nil {
+		if err := cli.WaitInterfaceIP(ctx, namespace, vmName, venueIPWait); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
 	}

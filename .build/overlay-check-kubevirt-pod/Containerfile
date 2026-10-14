@@ -1,9 +1,0 @@
-# Overlay Containerfile for deploy "check-kubevirt-pod"
-# Extra candies: 
-
-FROM localhost/check-kubevirt-pod-image:check-kubevirt-pod-2026.287.2219
-
-USER root
-
-
-USER user

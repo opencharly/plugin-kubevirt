@@ -1,4 +1,0 @@
-WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different charly version). Set CHARLY_PLUGIN_DIR to load plugins from a custom location.
-Resolved @github.com/opencharly/plugin-deploy-pod -> main (default branch)
-plugin plugin-deploy-pod: served from /home/atrawog/.cache/charly/plugins/plugin-deploy-pod-dad96ba7ebc2031b (build stamp f109733e8702b3a8); source /home/atrawog/.cache/charly/repos/github.com/opencharly/plugin-deploy-pod@main.view.817e2f3a5a2f41b9/candy/plugin-deploy-pod
-Resolved @github.com/opencharly/plugin-deploy-pod -> main (default branch)

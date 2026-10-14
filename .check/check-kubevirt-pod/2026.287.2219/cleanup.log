@@ -1,4 +1,0 @@
-WARNING: charly is a dev/worktree build (not installed at /usr/bin or /usr/local/bin); NOT loading the installed package's plugins from /usr/lib/charly/plugins (they may be built against a different charly version). Set CHARLY_PLUGIN_DIR to load plugins from a custom location.
-Removed /home/atrawog/.config/containers/systemd/charly-check-kubevirt-pod.container
-Reloaded systemd user daemon
-Cleaned charly.yml entry for check-kubevirt-pod

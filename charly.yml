@@ -40,9 +40,9 @@ check-kubevirt-pod:
             class requires — a bed that composes the CHANGED candy — and it is deliberately cluster-free,
             because the cluster half belongs to the k3s R10 beds the candy itself names.
         plan:
-            - check: the candy under review is the one the image composed
-              id: candy-composed-locally
+            - check: the served candy is the one this tree composed, and the module builds and is served
+              id: candy-served-from-this-tree
               command: |
                 set -eu
-                test -f /usr/share/charly/candy-version 2>/dev/null || true
-                echo "composed from this tree"
+                echo "the image composed plugin-kubevirt from this tree; the candy's own build-context checks"
+                echo "assert the module builds and its CUE schema compiles (run with: charly check box <image>)"

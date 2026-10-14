@@ -40,15 +40,6 @@ check-kubevirt-pod:
             class requires — a bed that composes the CHANGED candy — and it is deliberately cluster-free,
             because the cluster half belongs to the k3s R10 beds the candy itself names.
         plan:
-            - check: this tree's candy states the ordinal the schema enum fixes (the 7th deploy substrate)
-              id: kubevirt-ordinal-is-seventh
-              context:
-                - build
-              command: |
-                set -eu
-                pwd >&2
-                grep -q 'the 7th deploy' candy/plugin-kubevirt/charly.yml
-                echo "the tree under test states the 7th, matching #SubstrateKind's enum order"
             - check: the bed's image composes this tree's candy, and the candy's own build-context checks carry the assertions
               id: candy-composed-from-this-tree
               command: |

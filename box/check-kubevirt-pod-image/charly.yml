@@ -11,3 +11,9 @@ check-kubevirt-pod-image:
         base: quay.io/fedora/fedora:43
         candy:
             - plugin-kubevirt
+        plan:
+            - check: the composed image is the fedora base this candy declares
+              id: image-is-fedora
+              command: |
+                set -eu
+                grep -q '^ID=fedora' /etc/os-release

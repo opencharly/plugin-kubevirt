@@ -47,7 +47,7 @@ check-kubevirt-pod:
               command: |
                 set -eu
                 pwd >&2
-                grep -q 'deploy SUBSTRATE (7th)' candy/plugin-kubevirt/charly.yml
+                grep -q 'the 7th deploy' candy/plugin-kubevirt/charly.yml
                 echo "the tree under test states the 7th, matching #SubstrateKind's enum order"
             - check: the bed's image composes this tree's candy, and the candy's own build-context checks carry the assertions
               id: candy-composed-from-this-tree

@@ -64,13 +64,13 @@ kubevirt-skill:
         family: kubevirt
         owner: plugin-kubevirt
         description: |-
-            The `kubevirt:` deploy SUBSTRATE (6th): `kind: kubevirt` templates + `kubevirt:`/`target: kubevirt` deploys, the VirtualMachine CR lifecycle (DataVolume, runStrategy, VMI Ready + AgentConnected, managed `virtctl port-forward` SSH), instancetype, snapshots, live migration, and GPU host-device passthrough. Served out-of-process by candy/plugin-kubevirt; driven by the `charly kubevirt` CLI family. Use before authoring or troubleshooting any `kind: kubevirt` entity/deploy.
+            The `kubevirt:` deploy SUBSTRATE (7th): `kind: kubevirt` templates + `kubevirt:`/`target: kubevirt` deploys, the VirtualMachine CR lifecycle (DataVolume, runStrategy, VMI Ready + AgentConnected, managed `virtctl port-forward` SSH), instancetype, snapshots, live migration, and GPU host-device passthrough. Served out-of-process by candy/plugin-kubevirt; driven by the `charly kubevirt` CLI family. Use before authoring or troubleshooting any `kind: kubevirt` entity/deploy.
         category: kind
         triggers:
             - "KubeVirt / `kind: kubevirt` / a `kubevirt:` or `target: kubevirt` deploy / `deploy:kubevirt` / running a charly VM on a Kubernetes cluster"
             - "`charly kubevirt` CLI (build/create/start/stop/restart/destroy/console/ssh/snapshot/migrate/gpu/status) / the VirtualMachine CR lifecycle"
         content: |
-            # KubeVirt — the 6th charly deploy substrate
+            # KubeVirt — the 7th charly deploy substrate
 
             `kubevirt:` is a **deploy SUBSTRATE**: it is the venue a deploy runs on, exactly
             like `pod:`, `vm:`, `kubernetes:`, `local:`, `android:`, and `kindcluster:`. It is

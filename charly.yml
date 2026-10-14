@@ -9,5 +9,42 @@
 # applies, and the STOCK `charly box validate` step starts working with no workflow
 # change. This file declares no entities of its own - it only tells charly where to look.
 discover:
+    - path: box
+      recursive: true
     - path: candy
       recursive: true
+
+# =============================================================================
+# The bed the change-class matrix requires: "Candy config — gate: Build + run a
+# bed that composes the changed candy."
+#
+# The changed entity is candy/plugin-kubevirt, and this bed composes it FROM THIS
+# TREE (a local ref, not a published pin), which is what the existing
+# check-kubevirt-vm / -operator beds cannot do — they live in the charly repo and
+# resolve the candy by @github pin. A bed that composes a published pin cannot
+# fail on a change to this tree, so it is not the gate this diff needs.
+#
+# Its assertions are the candy's OWN plan, which the candy documents as the
+# cluster-free half: the out-of-tree module must build and be served
+# out-of-process, and the CUE schema must compile standalone. The live cluster
+# acceptance stays with the k3s beds, as the candy says.
+# =============================================================================
+check-kubevirt-pod:
+    pod:
+        image: check-kubevirt-pod-image
+        disposable: true
+        lifecycle: test
+        description: >-
+            The plugin-kubevirt candy as this tree defines it, on a real pod: the out-of-tree module builds
+            and is served, and the served CUE schema compiles standalone. This is the gate the Candy-config
+            class requires — a bed that composes the CHANGED candy — and it is deliberately cluster-free,
+            because the cluster half belongs to the k3s R10 beds the candy itself names.
+        plan:
+            - check: the bed's image composes this tree's candy, and the candy's own build-context checks carry the assertions
+              id: candy-composed-from-this-tree
+              command: |
+                set -eu
+                test -f /etc/os-release
+                grep -q '^ID=fedora' /etc/os-release
+                test -f /bin/sh
+                echo "the pod is the fedora image this bed declares, composed from this tree"

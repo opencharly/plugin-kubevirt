@@ -1,0 +1,5 @@
+.build/
+.check/
+image/
+.containerignore
+.dockerignore

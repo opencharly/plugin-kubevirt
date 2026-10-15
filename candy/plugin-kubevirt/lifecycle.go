@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -555,8 +557,18 @@ func startVirtctlPortForward(ctx context.Context, target clusterTarget, namespac
 		return nil, fmt.Errorf("port-forward: no state dir")
 	}
 	pidFile := filepath.Join(stateDir, "port-forward.pid")
+	// A live pidfile is NOT proof of a usable tunnel. When a deploy is interrupted, the
+	// detached supervisor outlives its VMI and its pidfile stays live, so reusing it hands
+	// the next run a tunnel into a VM that no longer exists — and every ssh poll then burns
+	// its whole cap against it (measured: plugin-kubevirt#32, a 30m0s wait-for-sshd cap spent
+	// on a supervisor ten hours old). Verify the tunnel carries THIS VM's ssh, and reap what
+	// cannot.
 	if pid, ok := readLivePid(pidFile); ok {
-		return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+		if forwardCarriesSSH("127.0.0.1", localPort, sshProbeWait) {
+			return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+		}
+		reapPortForwardGroup(pid)
+		_ = os.Remove(pidFile)
 	}
 	virtctl, err := resolveVirtctl()
 	if err != nil {
@@ -587,6 +599,45 @@ func portForwardStartError(pidFile, logFile string) error {
 }
 
 // readLivePid reads a pidfile and reports whether it names a live process.
+// sshProbeWait bounds a single liveness probe of the managed port-forward. It is a
+// bound on ONE dial, not a retry: either the tunnel answers with an ssh banner inside
+// it or the supervisor behind it is reaped and a fresh one is started.
+const sshProbeWait = 5 * time.Second
+
+// forwardCarriesSSH reports whether something at host:port speaks ssh right now. A
+// detached supervisor whose VMI is gone still ACCEPTS a connection and then silently
+// tunnels nowhere, so a successful dial proves nothing; only a banner does.
+func forwardCarriesSSH(host string, port int, wait time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetReadDeadline(time.Now().Add(wait)); err != nil {
+		return false
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return false
+	}
+	return string(buf) == "SSH-"
+}
+
+// reapPortForwardGroup kills a detached supervisor AND everything it leads. The
+// supervisor is started with setsid, so it leads its own process group: killing the
+// group takes the loop and the virtctl child with it. Killing only the child lets the
+// loop respawn it, which is a mistake this session made by hand before writing this.
+func reapPortForwardGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+}
+
 func readLivePid(pidFile string) (int, bool) {
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {

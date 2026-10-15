@@ -1,0 +1,19 @@
+# The bed's IMAGE: this repo's own plugin candy, composed LOCALLY so the bed exercises the tree under review
+# rather than the published one. The candy's own plan says why that is sufficient for the build-context
+# checks and why it must be a local ref: "These deterministic checks run in the BUILD context (charly check
+# box) where no cluster is reachable — the out-of-tree plugin must still ship a buildable Go module the host
+# can compile + serve out-of-process, and the plugin's CUE schema must compile + splice."
+check-kubevirt-pod-image:
+    candy:
+        description: The plugin-kubevirt candy under review, composed locally so the bed exercises this tree.
+        distro: [fedora]
+        build: [rpm]
+        base: quay.io/fedora/fedora:43
+        candy:
+            - plugin-kubevirt
+        plan:
+            - check: the composed image is the fedora base this candy declares
+              id: image-is-fedora
+              command: |
+                set -eu
+                grep -q '^ID=fedora' /etc/os-release

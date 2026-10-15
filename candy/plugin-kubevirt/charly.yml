@@ -110,22 +110,48 @@ kubevirt-skill:
             ## Authoring (sketch)
 
             ```yaml
-            version: 2026.261.1747
-            kubevirt:
-                vm:
-                    kind: kubevirt
-                    source:
-                        container_disk:
-                            image: ghcr.io/opencharly/arch-vm:latest
-                    machine: { cpus: 2, memory: 2Gi }
-                    guest: { user: arch }
-                    ssh: { user: arch }
-                prod:
-                    target: kubevirt
-                    from: kubevirt.vm          # template cross-ref, or an inline kind: kubevirt node
-                    cluster: prod              # a kind: kubernetes cluster template name
+            # The kind:kubevirt TEMPLATE — a VM definition. A deploy names it with `from:`.
+            # `distro` + `ssh_user` are the guest identity: they are required unless the
+            # source is a containerDisk whose VM box carries them in its OCI labels.
+            runner-vmi:
+                kubevirt:
+                    cluster: prod                # a kind:kubernetes cluster template name
                     namespace: vms
+                    distro: ubuntu
+                    ssh_user: ubuntu
+                    memory: 4G
+                    cpu: { cores: 2 }
+                    machine: q35
+                    firmware: { bootloader: efi }   # an Ubuntu cloud image is UEFI/GPT
+                    run_strategy: Always
+                    source:
+                        kind: data_volume         # container_disk | data_volume | pvc | clone
+                        size: 30Gi
+                        storage_class: csi-cinder-high-speed-gen2
+                        data_volume:
+                            http: { url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img }
+                    cloud_init: { timezone: UTC, charly_install: { strategy: auto } }
+
+            # The DEPLOY — a `kubevirt:` node carrying `from:`.
+            runner:
+                kubevirt:
+                    from: runner-vmi
             ```
+
+            ## The guest identity and the cluster it lands on
+
+            A `container_disk` source keeps no guest facts of its own: `distro` and `ssh_user`
+            are read from the VM box's `ai.opencharly.vm.box` OCI labels. Every OTHER arm
+            (`data_volume` / `pvc` / `clone`) is a bare disk, so it declares the pair on the
+            entity — an explicit value always wins over box labels. The id is validated against
+            the `#DistroID` vocabulary in this plugin's `OpValidate`, which also enforces the
+            presence rule (`schema/kubevirt.cue` documents both and delegates them here).
+
+            The cluster is named by `cluster:` (a `kind:kubernetes` template) or pinned with
+            `kube_context:`. The template's `kubeconfig` FILE is resolved beside its context, so
+            an externally-managed cluster is addressed by its own per-cluster kubeconfig rather
+            than by the ambient `$KUBECONFIG` / `~/.kube/config` — including by the managed
+            `virtctl port-forward`, which is the only route into the guest.
 
             ## The verb and the beds
 

@@ -26,9 +26,13 @@ import (
 type kubevirtDeployVenue struct {
 	Cluster     string `json:"cluster,omitempty"`
 	KubeContext string `json:"kube_context,omitempty"`
-	Namespace   string `json:"namespace,omitempty"`
-	DeployName  string `json:"deploy_name,omitempty"`
-	VMName      string `json:"vm_name,omitempty"`
+	// Kubeconfig is the kubeconfig FILE the named cluster template resolved to (empty → the
+	// ambient $KUBECONFIG / ~/.kube/config). Carried so a host-side consumer of the venue
+	// addresses the same file the entity declared.
+	Kubeconfig string `json:"kubeconfig,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
+	DeployName string `json:"deploy_name,omitempty"`
+	VMName     string `json:"vm_name,omitempty"`
 }
 
 // kubevirtPreresolveParams decodes the host's marshalDeployOpParams envelope (name/dir/
@@ -92,14 +96,15 @@ func invokePreresolve(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeRep
 	if err != nil {
 		return nil, fmt.Errorf("deploy %q: resolving kubevirt entity %q: %w", p.Name, entity, err)
 	}
-	kubeContext, err := resolveKubeContext(ctx, exec, p.Dir, kv)
+	target, err := resolveKubeContext(ctx, exec, p.Dir, kv)
 	if err != nil {
 		return nil, fmt.Errorf("deploy %q: resolving kubevirt cluster: %w", p.Name, err)
 	}
 
 	venue := kubevirtDeployVenue{
 		Cluster:     kv.Cluster,
-		KubeContext: kubeContext,
+		KubeContext: target.context,
+		Kubeconfig:  target.kubeconfig,
 		Namespace:   kv.Namespace,
 		DeployName:  p.Name,
 		VMName:      vmNameForDeploy(p.Name),
@@ -177,24 +182,27 @@ func resolveKubeVirtEntity(ctx context.Context, exec *sdk.Executor, dir, name st
 	return &kv, nil
 }
 
-// resolveKubeContext resolves the concrete kubeconfig context for a #KubeVirt entity:
-// an explicit kube_context wins; else the referenced kind:kubernetes cluster's
-// KubeconfigContext, self-loaded plugin-side (loaderkit.ResolveKubernetesEntityViaExecutor
-// — the SAME helper candy/plugin-kube uses, R3). An empty result is valid (the dynamic
-// client then uses the kubeconfig current-context).
-func resolveKubeContext(ctx context.Context, exec *sdk.Executor, dir string, kv *spec.KubeVirt) (string, error) {
+// resolveKubeContext resolves the concrete cluster target for a #KubeVirt entity: an
+// explicit kube_context wins for the CONTEXT; else the referenced kind:kubernetes cluster's
+// KubeconfigContext, self-loaded plugin-side (loaderkit.ResolveKubernetesEntityViaExecutor —
+// the SAME helper candy/plugin-kube uses, R3). The cluster template's kubeconfig FILE is
+// resolved in the same step, so a per-cluster kubeconfig an externally-managed cluster is
+// addressed by is honoured everywhere the venue reaches the cluster — including the managed
+// `virtctl port-forward` argv, which is the only route into the guest. An empty result is
+// valid (the dynamic client then uses the ambient kubeconfig's current-context).
+func resolveKubeContext(ctx context.Context, exec *sdk.Executor, dir string, kv *spec.KubeVirt) (clusterTarget, error) {
 	if kv.KubeContext != "" {
-		return kv.KubeContext, nil
+		return clusterTarget{context: kv.KubeContext}, nil
 	}
 	if kv.Cluster == "" {
-		return "", nil
+		return clusterTarget{}, nil
 	}
 	cluster, err := loaderkit.ResolveKubernetesEntityViaExecutor(ctx, exec, dir, kv.Cluster)
 	if err != nil {
-		return "", fmt.Errorf("resolving cluster %q: %w", kv.Cluster, err)
+		return clusterTarget{}, fmt.Errorf("resolving cluster %q: %w", kv.Cluster, err)
 	}
 	if cluster == nil {
-		return "", fmt.Errorf("kind:kubernetes cluster %q resolved to an empty value", kv.Cluster)
+		return clusterTarget{}, fmt.Errorf("kind:kubernetes cluster %q resolved to an empty value", kv.Cluster)
 	}
-	return cluster.KubeconfigContext, nil
+	return clusterTarget{kubeconfig: cluster.Kubeconfig, context: cluster.KubeconfigContext}, nil
 }

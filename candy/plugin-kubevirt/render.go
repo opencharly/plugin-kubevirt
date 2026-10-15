@@ -157,6 +157,14 @@ func renderDomain(kv spec.KubeVirt, opts RenderOptions) map[string]any {
 	}
 	if kv.Firmware != nil {
 		domain["firmware"] = renderFirmware(kv.Firmware)
+		// EFI Secure Boot needs the SMM feature ON: the KubeVirt admission webhook rejects the
+		// VM otherwise ("spec.template.spec.domain has EFI SecureBoot enabled. SecureBoot
+		// requires SMM, which is currently disabled" — MEASURED on the OVH quant-dev cluster).
+		// The pair is emitted together so the flag is usable at all; note that a node whose
+		// QEMU lacks SMM support is then reported by KubeVirt, not silently downgraded.
+		if kv.Firmware.Bootloader == "efi" && kv.Firmware.EFISecureBoot {
+			domain["features"] = map[string]any{"smm": map[string]any{"enabled": true}}
+		}
 	}
 	if kv.CPU != nil {
 		domain["cpu"] = renderCPU(kv.CPU)
@@ -251,11 +259,13 @@ func renderCPU(cpu *spec.KubevirtCPU) map[string]any {
 func renderFirmware(fw *spec.KubevirtFirmware) map[string]any {
 	switch fw.Bootloader {
 	case "efi":
-		efi := map[string]any{}
-		if fw.EFISecureBoot {
-			efi["secureBoot"] = true
-		}
-		return map[string]any{"bootloader": map[string]any{"efi": efi}}
+		// secureBoot is emitted EXPLICITLY, in both directions. KubeVirt's API defaults an
+		// unset `efi.secureBoot` to TRUE and its admission webhook then REJECTS the VM while
+		// SMM is off ("SecureBoot requires SMM, which is currently disabled" — MEASURED on the
+		// OVH quant-dev cluster). An empty `efi: {}` therefore made a plain UEFI guest
+		// impossible to express: `efi_secure_boot` unset AND `false` both rendered `{}`, so
+		// neither spelling reached the API as a decision, and the API's default decided.
+		return map[string]any{"bootloader": map[string]any{"efi": map[string]any{"secureBoot": fw.EFISecureBoot}}}
 	default: // "bios" (or unset)
 		return map[string]any{"bootloader": map[string]any{"bios": map[string]any{}}}
 	}
@@ -338,10 +348,10 @@ func renderInterfaces(kv spec.KubeVirt) []any {
 // renderCloudInitVolume builds the cloudInitNoCloud volume from the shared renderer.
 func renderCloudInitVolume(kv spec.KubeVirt, opts RenderOptions) (map[string]any, error) {
 	if opts.Distro == "" {
-		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest distro could not be resolved (the shared cloud-init renderer needs a distro id to emit the sshd unit; declare it on the containerDisk VM box, or drop cloud_init on a source whose distro cannot be read)")
+		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest distro could not be resolved (the shared cloud-init renderer needs a distro id to emit the sshd unit; declare `distro` on the entity, or use a containerDisk VM box whose ai.opencharly.vm.box labels carry it)")
 	}
 	if opts.SSHUser == "" {
-		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest ssh user could not be resolved (cloud-init would authorise no key and the guest would be unreachable; declare ssh_user on the containerDisk VM box)")
+		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest ssh user could not be resolved (cloud-init would authorise no key and the guest would be unreachable; declare `ssh_user` on the entity, or use a containerDisk VM box whose labels carry it)")
 	}
 	userData, metaData, networkConfig, err := renderCloudInit(kv, opts)
 	if err != nil {

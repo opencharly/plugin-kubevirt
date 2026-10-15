@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +165,24 @@ func kubevirtStateBase(hostHome string) string {
 // AgentConnected, start the managed port-forward, publish the ssh stanza, wait for
 // sshd + cloud-init, ensure charly is in the guest, and return the guest SSH venue
 // descriptor + the KubeVirtDeployState patch.
+// Venue wait bounds. MEASURED on a disposable bed (2026-10-14): a NESTED KubeVirt guest —
+// a VM inside the venue's own cluster VM — took ~14 minutes from VM start to AgentConnected,
+// while these bounds allowed 5. The rebuild leg of that bed then failed on a timeout that had
+// nothing to do with the change under test:
+//
+//	plugin-kubevirt prepare-venue: timeout waiting for the guest agent on default/<vm>-guest (AgentConnected)
+//
+// They are floors for a nested venue, not guesses: virt-handler publishes
+// status.interfaces[].ipAddress only AFTER AgentConnected, so the IP bound has to clear the
+// agent bound rather than run beside it. The venue path cannot see authored vars
+// (lifecycleParams carries none), so a venue cannot tune these yet; that gap is filed as
+// plugin-kubevirt#28 rather than papered over with a magic number here.
+const (
+	venueVMIReadyWait = 15 * time.Minute
+	venueAgentWait    = 20 * time.Minute
+	venueIPWait       = 10 * time.Minute
+)
+
 func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, host spec.HostEnv) (*pb.InvokeReply, error) {
 	var node spec.Deploy
 	if err := json.Unmarshal(p.Node, &node); err != nil {
@@ -175,10 +195,11 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: resolve entity %q: %w", entity, err)
 	}
-	kubeContext, err := resolveKubeContext(ctx, exec, p.Dir, kv)
+	target, err := resolveKubeContext(ctx, exec, p.Dir, kv)
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: resolve cluster: %w", err)
 	}
+	kubeContext := target.context
 	namespace := kv.Namespace
 	if namespace == "" {
 		namespace = "default"
@@ -223,7 +244,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		port = alloc
 	}
 
-	conn := &clusterConn{context: kubeContext}
+	conn := target.conn()
 	cli, err := newClusterOps(conn)
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
@@ -261,10 +282,10 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		if err := cli.EnsureRunning(ctx, namespace, vmName); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: ensure running: %w", err)
 		}
-		if err := cli.WaitVMIReady(ctx, namespace, vmName, 10*time.Minute); err != nil {
+		if err := cli.WaitVMIReady(ctx, namespace, vmName, venueVMIReadyWait); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
-		if err := cli.WaitAgentConnected(ctx, namespace, vmName, 5*time.Minute); err != nil {
+		if err := cli.WaitAgentConnected(ctx, namespace, vmName, venueAgentWait); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
 		// The managed port-forward dials the VMI through virt-api, which reads
@@ -272,7 +293,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 		// virt-handler (after AgentConnected), so wait for it BEFORE starting the
 		// forward — otherwise the first connection dials an empty host and KubeVirt's
 		// proxy listener dies while virtctl lives (plugin-kubevirt#14).
-		if err := cli.WaitInterfaceIP(ctx, namespace, vmName, 5*time.Minute); err != nil {
+		if err := cli.WaitInterfaceIP(ctx, namespace, vmName, venueIPWait); err != nil {
 			return nil, fmt.Errorf("plugin-kubevirt prepare-venue: %w", err)
 		}
 	}
@@ -281,7 +302,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 	// pidfile under the deploy's state dir) so it survives this plugin subprocess's
 	// lifetime; PostTeardown stops it by pidfile. Idempotent: a live forward on the
 	// persisted port is reused.
-	pf, err := newPortForwarder(ctx, kubeContext, namespace, vmName, port, stateDir)
+	pf, err := newPortForwarder(ctx, target, namespace, vmName, port, stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("plugin-kubevirt prepare-venue: start port-forward: %w", err)
 	}
@@ -367,23 +388,40 @@ func charlyInstallStrategy(kv *spec.KubeVirt) string {
 	return ""
 }
 
-// resolveGuestIdentity resolves the guest distro + ssh user for the entity. For a
-// containerDisk the distro comes from the VM box's OCI metadata
-// (deploykit.VmCapabilitiesFromLabels); the ssh user from the box metadata's SSHUser.
-// Other source kinds must carry their own cloud_init and are rejected when neither the
-// box metadata nor an explicit value resolves.
+// resolveGuestIdentity resolves the guest distro + ssh user for the entity. An explicit
+// `distro`/`ssh_user` on the entity WINS — the only way a source that carries no VM-box
+// metadata can declare them, because data_volume / pvc / clone are bare disks. A
+// containerDisk otherwise reads the pair from the VM box's OCI labels
+// (deploykit.VmCapabilitiesFromLabels). A source for which NEITHER resolves is an error: the
+// shared cloud-init renderer needs the distro to emit the right sshd unit and the user to
+// authorise a key, so the guest would otherwise boot unreachable.
 func resolveGuestIdentity(kv *spec.KubeVirt, _ string) (distro, sshUser string, err error) {
+	distro, sshUser = kv.Distro, kv.SSHUser
 	if kv.Source.Kind == "container_disk" {
-		meta, merr := resolveVmBoxMetadata(kv.Source.Image)
-		if merr == nil && meta != nil {
-			return meta.Distro, meta.SSHUser, nil
+		if meta, merr := resolveVmBoxMetadata(kv.Source.Image); merr == nil && meta != nil {
+			if distro == "" {
+				distro = meta.Distro
+			}
+			if sshUser == "" {
+				sshUser = meta.SSHUser
+			}
 		}
 	}
-	// Non-containerDisk, or unreadable box metadata: require an explicit cloud_init.
-	if kv.CloudInit == nil {
-		return "", "", fmt.Errorf("the kubevirt source %q has no VM-box metadata; a deploy needs a containerDisk VM box (distro + ssh user) or an explicit cloud_init", kv.Source.Kind)
+	if distro == "" || sshUser == "" {
+		var missing []string
+		if distro == "" {
+			missing = append(missing, "distro")
+		}
+		if sshUser == "" {
+			missing = append(missing, "ssh_user")
+		}
+		how := "declare " + strings.Join(missing, " + ") + " on the entity"
+		if kv.Source.Kind == "container_disk" {
+			how += ", or use a VM box whose ai.opencharly.vm.box labels carry them"
+		}
+		return "", "", fmt.Errorf("the kubevirt source %q has no guest identity: %s", kv.Source.Kind, how)
 	}
-	return "", "", fmt.Errorf("the kubevirt source %q needs an explicit guest distro + ssh user (not yet carried by #KubeVirt); use a containerDisk VM box", kv.Source.Kind)
+	return distro, sshUser, nil
 }
 
 // --- injectable seams (test stubs) -------------------------------------------
@@ -402,8 +440,8 @@ var resolveVmBoxMetadata = func(imageRef string) (*spec.VmBoxMetadata, error) {
 var newClusterOps = func(conn *clusterConn) (clusterOps, error) { return newDynamicCluster(conn) }
 
 // newPortForwarder starts a managed `virtctl port-forward`. Package var (test seam).
-var newPortForwarder = func(ctx context.Context, kubeContext, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
-	return startVirtctlPortForward(ctx, kubeContext, namespace, vmName, localPort, stateDir)
+var newPortForwarder = func(ctx context.Context, target clusterTarget, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
+	return startVirtctlPortForward(ctx, target, namespace, vmName, localPort, stateDir)
 }
 
 // resolvePriorKubeVirtState reads a deploy's persisted KubeVirtDeployState.
@@ -449,16 +487,23 @@ func resolveVirtctl() (string, error) {
 // (a bare name → `unsupported resource type '…'`; the older `--local-port`/`--port`
 // flags → `unknown flag`). The namespace is the `/<ns>` suffix of the target;
 // `--context` stays a GLOBAL flag. Pure; no I/O.
-func portForwardArgv(kubeContext, namespace, vmName string, localPort int) []string {
+func portForwardArgv(target clusterTarget, namespace, vmName string, localPort int) []string {
 	argv := []string{"port-forward"}
-	if kubeContext != "" {
-		argv = append(argv, "--context", kubeContext)
+	// --kubeconfig and --context are both GLOBAL virtctl flags, and the file must be named
+	// explicitly: on an externally-managed cluster the resolved file is a per-cluster
+	// kubeconfig the ambient $KUBECONFIG never points at, so omitting it would have virtctl
+	// dial whatever cluster the current-context happens to name.
+	if target.kubeconfig != "" {
+		argv = append(argv, "--kubeconfig", target.kubeconfig)
 	}
-	target := "vm/" + vmName
+	if target.context != "" {
+		argv = append(argv, "--context", target.context)
+	}
+	target0 := "vm/" + vmName
 	if namespace != "" {
-		target += "/" + namespace
+		target0 += "/" + namespace
 	}
-	return append(argv, target, strconv.Itoa(localPort)+":22")
+	return append(argv, target0, strconv.Itoa(localPort)+":22")
 }
 
 // portForwarder is the managed `virtctl port-forward` handle.
@@ -507,20 +552,30 @@ func portForwardSupervisorCmd(virtctl string, argv []string, pidFile, logFile st
 // matters: the plugin runs as a host subprocess per Invoke and exits after PrepareVenue,
 // so a child of the plugin process would be reaped when it returns. Idempotent: when the
 // pidfile names a live supervisor, it is reused rather than a second one started.
-func startVirtctlPortForward(ctx context.Context, kubeContext, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
+func startVirtctlPortForward(ctx context.Context, target clusterTarget, namespace, vmName string, localPort int, stateDir string) (portForwarder, error) {
 	if stateDir == "" {
 		return nil, fmt.Errorf("port-forward: no state dir")
 	}
 	pidFile := filepath.Join(stateDir, "port-forward.pid")
+	// A live pidfile is NOT proof of a usable tunnel. When a deploy is interrupted, the
+	// detached supervisor outlives its VMI and its pidfile stays live, so reusing it hands
+	// the next run a tunnel into a VM that no longer exists — and every ssh poll then burns
+	// its whole cap against it (measured: plugin-kubevirt#32, a 30m0s wait-for-sshd cap spent
+	// on a supervisor ten hours old). Verify the tunnel carries THIS VM's ssh, and reap what
+	// cannot.
 	if pid, ok := readLivePid(pidFile); ok {
-		return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+		if forwardCarriesSSH("127.0.0.1", localPort, sshProbeWait) {
+			return &virtctlPortForward{pid: pid, pidFile: pidFile}, nil
+		}
+		reapPortForwardGroup(pid)
+		_ = os.Remove(pidFile)
 	}
 	virtctl, err := resolveVirtctl()
 	if err != nil {
 		return nil, err
 	}
 	logFile := filepath.Join(stateDir, "port-forward.log")
-	script := portForwardSupervisorCmd(virtctl, portForwardArgv(kubeContext, namespace, vmName, localPort), pidFile, logFile, localPort, portForwardListenTimeoutSec)
+	script := portForwardSupervisorCmd(virtctl, portForwardArgv(target, namespace, vmName, localPort), pidFile, logFile, localPort, portForwardListenTimeoutSec)
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	if err := cmd.Run(); err != nil {
 		return nil, err
@@ -544,6 +599,45 @@ func portForwardStartError(pidFile, logFile string) error {
 }
 
 // readLivePid reads a pidfile and reports whether it names a live process.
+// sshProbeWait bounds a single liveness probe of the managed port-forward. It is a
+// bound on ONE dial, not a retry: either the tunnel answers with an ssh banner inside
+// it or the supervisor behind it is reaped and a fresh one is started.
+const sshProbeWait = 5 * time.Second
+
+// forwardCarriesSSH reports whether something at host:port speaks ssh right now. A
+// detached supervisor whose VMI is gone still ACCEPTS a connection and then silently
+// tunnels nowhere, so a successful dial proves nothing; only a banner does.
+func forwardCarriesSSH(host string, port int, wait time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetReadDeadline(time.Now().Add(wait)); err != nil {
+		return false
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return false
+	}
+	return string(buf) == "SSH-"
+}
+
+// reapPortForwardGroup kills a detached supervisor AND everything it leads. The
+// supervisor is started with setsid, so it leads its own process group: killing the
+// group takes the loop and the virtctl child with it. Killing only the child lets the
+// loop respawn it, which is a mistake this session made by hand before writing this.
+func reapPortForwardGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+}
+
 func readLivePid(pidFile string) (int, bool) {
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {

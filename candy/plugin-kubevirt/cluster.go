@@ -35,6 +35,24 @@ type clusterConn struct {
 	context    string // input kube_context — kubeconfig context (empty → current-context)
 }
 
+// clusterTarget is the resolved cluster handle for a #KubeVirt entity: the kubeconfig FILE
+// and the context INSIDE it. Both may be empty, meaning "the ambient kubeconfig, its
+// current-context" — what a charly-created k3s/kind cluster relies on.
+//
+// The FILE is carried beside the context because an externally-managed cluster (OVH / GKE /
+// EKS / on-prem) is normally addressed by a per-cluster kubeconfig rather than by the ambient
+// $KUBECONFIG / ~/.kube/config, and a context NAME cannot be resolved against a file the
+// plugin was never told about.
+type clusterTarget struct {
+	kubeconfig string
+	context    string
+}
+
+// conn builds the dynamic-client connection for the resolved target.
+func (t clusterTarget) conn() *clusterConn {
+	return &clusterConn{kubeconfig: t.kubeconfig, context: t.context}
+}
+
 func connFromInput(in *params.KubeVirtInput) *clusterConn {
 	return &clusterConn{kubeconfig: in.Kubeconfig, context: in.KubeContext}
 }

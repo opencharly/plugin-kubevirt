@@ -110,6 +110,15 @@ func TestRenderVirtualMachine_ContainerDisk(t *testing.T) {
 	if efi["secureBoot"] != true {
 		t.Errorf("secureBoot = %v", efi)
 	}
+	// Secure Boot requires KubeVirt's SMM feature, or the admission webhook rejects the VM
+	// ("SecureBoot requires SMM, which is currently disabled").
+	feat, ok := domain["features"].(map[string]any)
+	if !ok {
+		t.Fatalf("secure boot must emit the SMM feature, got %v", domain["features"])
+	}
+	if feat["smm"].(map[string]any)["enabled"] != true {
+		t.Errorf("smm = %v", feat)
+	}
 	cpu := domain["cpu"].(map[string]any)
 	topo := cpu["topology"].(map[string]any)
 	if topo["cores"] != int64(2) || topo["sockets"] != int64(1) || topo["threads"] != int64(1) {
@@ -294,6 +303,36 @@ func TestRenderVirtualMachine_BiosDefault(t *testing.T) {
 	fw := obj["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["domain"].(map[string]any)["firmware"].(map[string]any)
 	if fw["bootloader"].(map[string]any)["bios"] == nil {
 		t.Errorf("expected bios bootloader, got %v", fw)
+	}
+}
+
+// TestRenderVirtualMachine_PlainUEFI pins the plain-UEFI fix. KubeVirt's API defaults an
+// UNSET `efi.secureBoot` to TRUE, and its admission webhook then rejects the VM while SMM is
+// off (measured on the OVH quant-dev cluster). The old renderer emitted `efi: {}` for
+// `bootloader: efi` with `efi_secure_boot` unset OR false, so a plain UEFI guest — what an
+// Ubuntu cloud image needs, its bootloader living on the ESP — could not be expressed at all:
+// neither spelling reached the API as a decision, so the API's default decided.
+func TestRenderVirtualMachine_PlainUEFI(t *testing.T) {
+	kv := spec.KubeVirt{
+		Source:   spec.KubevirtSource{Kind: "container_disk", Image: "img"},
+		Firmware: &spec.KubevirtFirmware{Bootloader: "efi"},
+	}
+	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	domain := obj["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["domain"].(map[string]any)
+	fw := domain["firmware"].(map[string]any)
+	efi := fw["bootloader"].(map[string]any)["efi"].(map[string]any)
+	sb, ok := efi["secureBoot"]
+	if !ok {
+		t.Fatalf("secureBoot must be emitted EXPLICITLY (KubeVirt defaults it to true): %v", efi)
+	}
+	if sb != false {
+		t.Errorf("secureBoot = %v, want false", sb)
+	}
+	if _, ok := domain["features"]; ok {
+		t.Errorf("a non-secure-boot guest must not carry the SMM feature: %v", domain["features"])
 	}
 }
 

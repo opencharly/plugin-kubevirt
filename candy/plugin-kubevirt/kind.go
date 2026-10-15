@@ -3,6 +3,8 @@ package kubevirt
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	pb "github.com/opencharly/spec/proto"
 	"github.com/opencharly/spec/spec"
@@ -73,7 +75,11 @@ type kubevirtValidateBody struct {
 		Threads int `json:"threads"`
 	} `json:"cpu"`
 	Instancetype string `json:"instancetype"`
-	GPUs         []struct {
+	// Distro / SSHUser are the entity's explicit GUEST IDENTITY (schema/kubevirt.cue): the
+	// pair a source with no VM-box metadata must declare (data_volume / pvc / clone).
+	Distro  string `json:"distro"`
+	SSHUser string `json:"ssh_user"`
+	GPUs    []struct {
 		ResourceName string `json:"resource_name"`
 		DeviceName   string `json:"device_name"`
 	} `json:"gpus"`
@@ -124,6 +130,42 @@ func validateKubeVirtDeep(paramsJSON json.RawMessage) (spec.Diagnostics, error) 
 			Path:     "source.storage_class",
 			Message:  "is not valid on a container_disk source (a containerDisk is not a PVC-backed volume)",
 		})
+	}
+	// The guest-identity presence rule schema/kubevirt.cue documents and delegates here: a
+	// source that carries no VM-box metadata (data_volume / pvc / clone is a bare disk) has
+	// nowhere else to get the pair the shared cloud-init renderer needs to emit the sshd unit
+	// and authorise a key. Guarded on the KNOWN, valid kind set so an unknown kind reports its
+	// own error alone rather than one error plus a misleading missing-identity one.
+	if body.Source.Kind != "" && kubevirtSourceKinds[body.Source.Kind] && body.Source.Kind != "container_disk" {
+		var missing []string
+		if body.Distro == "" {
+			missing = append(missing, "distro")
+		}
+		if body.SSHUser == "" {
+			missing = append(missing, "ssh_user")
+		}
+		if len(missing) > 0 {
+			diags.Items = append(diags.Items, spec.Diagnostic{
+				Severity: "error",
+				Path:     missing[0],
+				Message: fmt.Sprintf("a %s source carries no VM-box metadata: declare %s on the entity (a containerDisk reads them from the box's OCI labels instead)",
+					body.Source.Kind, strings.Join(missing, " + ")),
+			})
+		}
+	}
+	if body.Distro != "" {
+		if _, ok := spec.DistroFormats[body.Distro]; !ok {
+			known := make([]string, 0, len(spec.DistroFormats))
+			for id := range spec.DistroFormats {
+				known = append(known, id)
+			}
+			sort.Strings(known)
+			diags.Items = append(diags.Items, spec.Diagnostic{
+				Severity: "error",
+				Path:     "distro",
+				Message:  fmt.Sprintf("%q is not a known distro id (known: %s)", body.Distro, strings.Join(known, ", ")),
+			})
+		}
 	}
 
 	for i, g := range body.GPUs {

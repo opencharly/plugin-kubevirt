@@ -63,8 +63,6 @@ kubevirt-skill:
         name: kubevirt
         family: kubevirt
         owner: plugin-kubevirt
-        description: |-
-            The `kubevirt:` deploy SUBSTRATE (7th): `kind: kubevirt` templates + `kubevirt:`/`target: kubevirt` deploys, the VirtualMachine CR lifecycle (DataVolume, runStrategy, VMI Ready + AgentConnected, managed `virtctl port-forward` SSH), instancetype, snapshots, live migration, and GPU host-device passthrough. Served out-of-process by candy/plugin-kubevirt; driven by the `charly kubevirt` CLI family. Use before authoring or troubleshooting any `kind: kubevirt` entity/deploy.
         category: kind
         triggers:
             - "KubeVirt / `kind: kubevirt` / a `kubevirt:` or `target: kubevirt` deploy / `deploy:kubevirt` / running a charly VM on a Kubernetes cluster"
@@ -74,8 +72,6 @@ check-kubevirt-skill:
         name: check-kubevirt
         family: kubevirt
         owner: plugin-kubevirt
-        description: |-
-            The declarative `kubevirt:` check verb (served out-of-process by candy/plugin-kubevirt): vm / vmi / wait-ready / printable-status / guest-info / datavolume / snapshot / migration / start-stop-restart / console / port-forward, over the KubeVirt + CDI + instancetype + snapshot APIs. Use before authoring `kubevirt:` steps in a candy/box plan or probing a live KubeVirt deploy.
         category: commands
         triggers:
             - "the `kubevirt:` check verb / probing a running KubeVirt cluster from a candy/box plan (vm / vmi / wait-ready / guest-info / migration / snapshot / datavolume)"
@@ -95,8 +91,6 @@ kubevirt-operator-skill:
         name: kubevirt-operator
         family: kubevirt
         owner: plugin-kubevirt
-        description: |-
-            KubeVirt + CDI platform install on a Kubernetes cluster — the `candy/kubevirt-operator` layer downloads the pinned operator + CR manifests and applies them with the `kube:` verb, then waits for the KubeVirt/CDI CRs with the `kubevirt:` verb. Use before installing KubeVirt on a k3s/kind/kubernetes venue, authoring the platform leg of a kubevirt bed, or authoring the kubevirt-vm cluster entity.
         category: commands
         triggers:
             - "installing KubeVirt + CDI on a cluster / `candy/kubevirt-operator` / the kubevirt platform leg of a check bed"

@@ -120,9 +120,13 @@ func TestRenderVirtualMachine_ContainerDisk(t *testing.T) {
 		t.Errorf("smm = %v", feat)
 	}
 	cpu := domain["cpu"].(map[string]any)
-	topo := cpu["topology"].(map[string]any)
-	if topo["cores"] != int64(2) || topo["sockets"] != int64(1) || topo["threads"] != int64(1) {
-		t.Errorf("cpu topology = %v", topo)
+	// KubeVirt takes these FLAT. A nested `topology` is dropped by the API server and the
+	// guest silently runs with one core, so the assertion is on the emitted shape.
+	if _, nested := cpu["topology"]; nested {
+		t.Errorf("cpu must not nest topology: %v", cpu)
+	}
+	if cpu["cores"] != int64(2) || cpu["sockets"] != int64(1) || cpu["threads"] != int64(1) {
+		t.Errorf("cpu = %v", cpu)
 	}
 	if domain["resources"].(map[string]any)["requests"].(map[string]any)["memory"] != "4G" {
 		t.Errorf("memory = %v", domain["resources"])

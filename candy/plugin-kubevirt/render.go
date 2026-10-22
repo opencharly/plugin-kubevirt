@@ -234,18 +234,20 @@ func renderDomain(kv spec.KubeVirt, opts RenderOptions) map[string]any {
 
 func renderCPU(cpu *spec.KubevirtCPU) map[string]any {
 	out := map[string]any{}
-	if cpu.Cores > 0 || cpu.Sockets > 0 || cpu.Threads > 0 {
-		topology := map[string]any{}
-		if cpu.Cores > 0 {
-			topology["cores"] = int64(cpu.Cores)
-		}
-		if cpu.Sockets > 0 {
-			topology["sockets"] = int64(cpu.Sockets)
-		}
-		if cpu.Threads > 0 {
-			topology["threads"] = int64(cpu.Threads)
-		}
-		out["topology"] = topology
+	// KubeVirt's `domain.cpu` takes cores/sockets/threads FLAT. A nested `topology`
+	// object is not in its API: the API server drops it as an unknown field and the
+	// guest silently gets the default single core. Measured on a 16-core
+	// `githubrunner-ubuntu-vmi` deploy: the VMI reported `cpu: {cores:1}` and the guest
+	// `nproc` was 1, while kubectl warned
+	// `unknown field "spec.template.spec.domain.cpu.topology"`.
+	if cpu.Cores > 0 {
+		out["cores"] = int64(cpu.Cores)
+	}
+	if cpu.Sockets > 0 {
+		out["sockets"] = int64(cpu.Sockets)
+	}
+	if cpu.Threads > 0 {
+		out["threads"] = int64(cpu.Threads)
 	}
 	if cpu.Model != "" {
 		out["model"] = cpu.Model

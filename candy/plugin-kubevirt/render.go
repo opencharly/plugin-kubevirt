@@ -203,11 +203,14 @@ func renderDomain(kv spec.KubeVirt, opts RenderOptions) map[string]any {
 		for _, extra := range d.Disks {
 			devices["disks"] = appendSlice(devices["disks"], extra)
 		}
-		// Host-device passthrough (spec.domain.devices.hostDevices). It is the ONLY way a
-		// guest gets its own /dev/kvm, which is what nested virtualisation needs — a CPU
-		// feature alone is not enough. device_name is required by the schema; name is the
-		// guest-visible label and is omitted when unset so KubeVirt's own default
-		// (device_name) applies.
+		// Host-device passthrough (spec.domain.devices.hostDevices) for PCI/MDEV/USB
+		// devices the cluster's device plugin advertises. This is NOT the nested-
+		// virtualisation route: a guest's own /dev/kvm comes from `cpu.model:
+		// host-passthrough`, its kernel loads kvm_amd/kvm_intel and creates the device
+		// (MEASURED; `hostDevices` additionally needs KubeVirt's Alpha `HostDevices`
+		// feature gate and its address pools are PCI/MDEV/USB only). device_name is
+		// required by the schema; name is the guest-visible label and is omitted when
+		// unset so KubeVirt's own default (device_name) applies.
 		for _, hd := range d.Host_devices {
 			entry := map[string]any{"deviceName": hd.Device_name}
 			if hd.Name != "" {

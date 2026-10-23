@@ -30,8 +30,9 @@ plugin-kubevirt:
             migrate/gpu/status`). GPU host-device passthrough maps `requires_exclusive:` /
             a #KubeVirt `gpus:` entry onto spec.domain.devices.gpus (the cluster device
             plugin owns the physical card; no host arbiter). Host devices
-            (`devices.host_devices`) render to spec.domain.devices.hostDevices — the only
-            route to a guest /dev/kvm, which is what nested virtualisation needs. The R10
+            (`devices.host_devices`) render to spec.domain.devices.hostDevices for
+            PCI/MDEV/USB passthrough; nested virtualisation is NOT this field — a guest's
+            /dev/kvm comes from `cpu.model: host-passthrough` (MEASURED). The R10
             consumers are the check-kubevirt-operator + check-kubevirt-vm beds.
         plugin:
             providers:

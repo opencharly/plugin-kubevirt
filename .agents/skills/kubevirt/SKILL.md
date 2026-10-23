@@ -3,7 +3,8 @@ name: kubevirt
 description: 'The `kubevirt:` deploy SUBSTRATE (7th): `kind: kubevirt` templates +
   `kubevirt:`/`target: kubevirt` deploys, the VirtualMachine CR lifecycle (DataVolume,
   runStrategy, VMI Ready + AgentConnected, managed `virtctl port-forward` SSH), instancetype,
-  snapshots, live migration, and GPU host-device passthrough. Served out-of-process
+  snapshots, live migration, and GPU/KVM host-device passthrough (the nested-virtualisation
+  route to a guest /dev/kvm). Served out-of-process
   by candy/plugin-kubevirt; driven by the `charly kubevirt` CLI family. Use before
   authoring or troubleshooting any `kind: kubevirt` entity/deploy.'
 ---
@@ -75,6 +76,27 @@ runner:
     kubevirt:
         from: runner-vmi
 ```
+
+## Host devices and nested virtualisation
+
+`devices.host_devices` is KubeVirt host-device passthrough
+(`spec.domain.devices.hostDevices`). It is the ONLY way a guest gets its own
+`/dev/kvm` — a CPU feature alone is not enough — so it is what a nested
+virtualisation guest (a CI runner that itself runs VMs) needs:
+
+```yaml
+runner-vmi:
+    kubevirt:
+        cpu: { cores: 2, model: host-passthrough }   # expose the host CPU features
+        devices:
+            host_devices:
+                - { device_name: kvm, name: kvm }    # /dev/kvm inside the guest
+```
+
+`device_name` is the resource the cluster's device plugin advertises, without the
+`devices.kubevirt.io/` prefix; `name` is the guest-visible label and defaults to
+`device_name`. The cluster must advertise the device (`kubectl describe node`
+shows `devices.kubevirt.io/kvm: 1k` when it does).
 
 ## The guest identity and the cluster it lands on
 

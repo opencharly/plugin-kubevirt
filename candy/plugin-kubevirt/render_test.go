@@ -356,6 +356,43 @@ func TestRenderVirtualMachine_GpuDeviceName(t *testing.T) {
 	}
 }
 
+// TestRenderVirtualMachine_HostDevices asserts host-device passthrough renders
+// spec.domain.devices.hostDevices. It is the ONLY way a guest gets its own /dev/kvm,
+// which is what nested virtualisation needs — a CPU feature alone is not enough.
+// deviceName is required; name is optional and omitted when unset so KubeVirt's own
+// default (deviceName) applies.
+func TestRenderVirtualMachine_HostDevices(t *testing.T) {
+	kv := spec.KubeVirt{
+		Source: spec.KubevirtSource{Kind: "container_disk", Image: "img"},
+		Devices: &spec.KubevirtDevices{
+			Host_devices: []spec.KubevirtHostDevice{
+				{Device_name: "kvm", Name: "kvm"},
+				{Device_name: "nvidia.com/gpu"},
+			},
+		},
+	}
+	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "hostdev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := obj["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["domain"].(map[string]any)["devices"].(map[string]any)
+	raw, ok := devices["hostDevices"].([]any)
+	if !ok || len(raw) != 2 {
+		t.Fatalf("hostDevices = %v, want 2 entries", devices["hostDevices"])
+	}
+	kvm := raw[0].(map[string]any)
+	if kvm["deviceName"] != "kvm" || kvm["name"] != "kvm" {
+		t.Errorf("hostDevices[0] = %v, want {deviceName: kvm, name: kvm}", kvm)
+	}
+	unnamed := raw[1].(map[string]any)
+	if unnamed["deviceName"] != "nvidia.com/gpu" {
+		t.Errorf("hostDevices[1].deviceName = %v", unnamed["deviceName"])
+	}
+	if _, present := unnamed["name"]; present {
+		t.Errorf("hostDevices[1].name must be omitted when unset, got %v", unnamed["name"])
+	}
+}
+
 // TestRenderVirtualMachine_Clone asserts the clone arm emits a DataVolume template
 // sourced from the clone PVC.
 func TestRenderVirtualMachine_Clone(t *testing.T) {

@@ -3,8 +3,8 @@ name: kubevirt
 description: 'The `kubevirt:` deploy SUBSTRATE (7th): `kind: kubevirt` templates +
   `kubevirt:`/`target: kubevirt` deploys, the VirtualMachine CR lifecycle (DataVolume,
   runStrategy, VMI Ready + AgentConnected, managed `virtctl port-forward` SSH), instancetype,
-  snapshots, live migration, and GPU/KVM host-device passthrough (the nested-virtualisation
-  route to a guest /dev/kvm). Served out-of-process
+  snapshots, live migration, GPU host-device passthrough, and nested virtualisation via a
+  host-passthrough CPU. Served out-of-process
   by candy/plugin-kubevirt; driven by the `charly kubevirt` CLI family. Use before
   authoring or troubleshooting any `kind: kubevirt` entity/deploy.'
 ---
@@ -79,24 +79,40 @@ runner:
 
 ## Host devices and nested virtualisation
 
-`devices.host_devices` is KubeVirt host-device passthrough
-(`spec.domain.devices.hostDevices`). It is the ONLY way a guest gets its own
-`/dev/kvm` — a CPU feature alone is not enough — so it is what a nested
-virtualisation guest (a CI runner that itself runs VMs) needs:
+These are two DIFFERENT things, and the first is not the route to the second.
+
+**`devices.host_devices`** is KubeVirt host-device passthrough
+(`spec.domain.devices.hostDevices`) for PCI/MDEV/USB devices a cluster device
+plugin advertises. The cluster must allowlist the resource in the KubeVirt CR's
+`permittedHostDevices` and enable the Alpha `HostDevices` feature gate; a VMI
+carrying the field without the gate is rejected at admission
+(`spec.HostDevices: Host Devices feature gate is not enabled in kubevirt-config`,
+MEASURED). It cannot carry a character device.
+
+```yaml
+vmi:
+    kubevirt:
+        devices:
+            host_devices:
+                - { device_name: intel.com/qat, name: quickaccess1 }
+```
+
+`device_name` is the resource the cluster's device plugin advertises; `name` is
+the guest-visible label and defaults to `device_name`.
+
+**Nested virtualisation** — a guest that itself runs VMs — needs a guest
+`/dev/kvm`, and that comes from a **`host-passthrough` CPU**, not from host
+devices: the guest's own kernel then loads `kvm_amd`/`kvm_intel` and creates the
+device. MEASURED on an AMD host: `host-model` gave neither `svm` nor `/dev/kvm`;
+after `cpu.model: host-passthrough` the guest had `svm`, `/dev/kvm`
+(`root:kvm 0660`), `kvm_amd` loaded, and a nested
+`qemu-system-x86_64 -accel kvm` ran with exit 0.
 
 ```yaml
 runner-vmi:
     kubevirt:
-        cpu: { cores: 2, model: host-passthrough }   # expose the host CPU features
-        devices:
-            host_devices:
-                - { device_name: kvm, name: kvm }    # /dev/kvm inside the guest
+        cpu: { cores: 2, model: host-passthrough }   # the guest then has svm + /dev/kvm
 ```
-
-`device_name` is the resource the cluster's device plugin advertises, without the
-`devices.kubevirt.io/` prefix; `name` is the guest-visible label and defaults to
-`device_name`. The cluster must advertise the device (`kubectl describe node`
-shows `devices.kubevirt.io/kvm: 1k` when it does).
 
 ## The guest identity and the cluster it lands on
 

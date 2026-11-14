@@ -36,23 +36,14 @@ func kindLoad(req *pb.InvokeRequest) (*pb.InvokeReply, error) {
 	if env.Standalone == nil {
 		return nil, fmt.Errorf("kubevirt kind: host threaded no pre-decoded node (op.Env.standalone missing)")
 	}
+	// The wire carries the canonical node as OPAQUE BYTES (D-SCH-7): echo the body
+	// verbatim — the host folds it into its kubevirt template map.
 	switch env.Standalone.Shape {
-	case "template":
-		if len(env.Standalone.Template) == 0 {
-			return nil, fmt.Errorf("kubevirt kind: template shape carries no template")
+	case "template", "deploy":
+		if len(env.Standalone.Body) == 0 {
+			return nil, fmt.Errorf("kubevirt kind: %s shape carries no body", env.Standalone.Shape)
 		}
-		// Echo the host-pre-decoded typed template value verbatim (raw JSON) — the host
-		// folds it into its kubevirt template map.
-		return &pb.InvokeReply{ResultJson: env.Standalone.Template}, nil
-	case "deploy":
-		if env.Standalone.Deploy == nil {
-			return nil, fmt.Errorf("kubevirt kind: deploy shape carries no deploy node")
-		}
-		out, err := json.Marshal(env.Standalone.Deploy)
-		if err != nil {
-			return nil, fmt.Errorf("kubevirt kind: marshal deploy: %w", err)
-		}
-		return &pb.InvokeReply{ResultJson: out}, nil
+		return &pb.InvokeReply{ResultJson: env.Standalone.Body}, nil
 	default:
 		return nil, fmt.Errorf("kubevirt kind: unknown load shape %q (want deploy|template)", env.Standalone.Shape)
 	}

@@ -4,14 +4,15 @@ go 1.26.8
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/opencharly/sdk v0.2026296.1207
-	github.com/opencharly/spec v0.2026296.1338
+	github.com/opencharly/sdk v0.2026318.1654
+	github.com/opencharly/spec v0.2026318.2106
 	google.golang.org/grpc v1.83.2
 	k8s.io/apimachinery v0.37.0
 	k8s.io/client-go v0.37.0
 )
 
 require (
+	cuelabs.dev/go/oci/ociregistry v0.0.0-20251212221603-3adeb8663819 // indirect
 	cuelang.org/go v0.16.1 // indirect
 	github.com/cockroachdb/apd/v3 v3.2.1 // indirect
 	github.com/containerd/containerd/v2 v2.4.1 // indirect
@@ -39,6 +40,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/protocolbuffers/txtpbfmt v0.0.0-20260217160748-a481f6a22f94 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -47,6 +49,7 @@ require (
 	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.42.0 // indirect

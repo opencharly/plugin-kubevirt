@@ -44,7 +44,7 @@ type RenderOptions struct {
 // RenderVirtualMachine renders a #KubeVirt entity into a KubeVirt `VirtualMachine` CR
 // (apiVersion kubevirt.io/v1). The returned map is a plain `map[string]any` ready to
 // hand to the dynamic client as an Unstructured.
-func RenderVirtualMachine(kv spec.KubeVirt, opts RenderOptions) (map[string]any, error) {
+func RenderVirtualMachine(kv kubevirtSpec, opts RenderOptions) (map[string]any, error) {
 	if opts.Namespace == "" {
 		opts.Namespace = "default"
 	}
@@ -148,7 +148,7 @@ func RenderVirtualMachine(kv spec.KubeVirt, opts RenderOptions) (map[string]any,
 
 // renderDomain renders spec.template.spec.domain (without the boot disk; the caller
 // attaches disks).
-func renderDomain(kv spec.KubeVirt, opts RenderOptions) map[string]any {
+func renderDomain(kv kubevirtSpec, opts RenderOptions) map[string]any {
 	domain := map[string]any{}
 	devices := map[string]any{}
 
@@ -247,7 +247,7 @@ func renderDomain(kv spec.KubeVirt, opts RenderOptions) map[string]any {
 	return domain
 }
 
-func renderCPU(cpu *spec.KubevirtCPU) map[string]any {
+func renderCPU(cpu *kubevirtCPU) map[string]any {
 	out := map[string]any{}
 	// KubeVirt's `domain.cpu` takes cores/sockets/threads FLAT. A nested `topology`
 	// object is not in its API: the API server drops it as an unknown field and the
@@ -273,7 +273,7 @@ func renderCPU(cpu *spec.KubevirtCPU) map[string]any {
 	return out
 }
 
-func renderFirmware(fw *spec.KubevirtFirmware) map[string]any {
+func renderFirmware(fw *kubevirtFirmware) map[string]any {
 	switch fw.Bootloader {
 	case "efi":
 		// secureBoot is emitted EXPLICITLY, in both directions. KubeVirt's API defaults an
@@ -288,7 +288,7 @@ func renderFirmware(fw *spec.KubevirtFirmware) map[string]any {
 	}
 }
 
-func renderMigration(m *spec.KubevirtMigration) map[string]any {
+func renderMigration(m *kubevirtMigration) map[string]any {
 	out := map[string]any{}
 	if m.AllowAutoConverge {
 		out["allowAutoConverge"] = true
@@ -305,7 +305,7 @@ func renderMigration(m *spec.KubevirtMigration) map[string]any {
 // renderStorage renders the boot volume(s) + networks + boot disk from the source arm.
 // It returns the volumes list, the networks list, and the disk entries (each a
 // `{name, disk:{bus}}` map referencing a volume name).
-func renderStorage(kv spec.KubeVirt, bootName string) (volumes []any, networks []any, disks []any) {
+func renderStorage(kv kubevirtSpec, bootName string) (volumes []any, networks []any, disks []any) {
 	src := kv.Source
 	switch src.Kind {
 	case "container_disk":
@@ -339,7 +339,7 @@ func renderStorage(kv spec.KubeVirt, bootName string) (volumes []any, networks [
 
 // renderInterfaces renders spec.template.spec.domain.devices.interfaces from the
 // authored network block (a single masquerade/bridge/pod interface over the pod net).
-func renderInterfaces(kv spec.KubeVirt) []any {
+func renderInterfaces(kv kubevirtSpec) []any {
 	iface := "masquerade"
 	model := "virtio"
 	if kv.Network != nil {
@@ -363,7 +363,7 @@ func renderInterfaces(kv spec.KubeVirt) []any {
 }
 
 // renderCloudInitVolume builds the cloudInitNoCloud volume from the shared renderer.
-func renderCloudInitVolume(kv spec.KubeVirt, opts RenderOptions) (map[string]any, error) {
+func renderCloudInitVolume(kv kubevirtSpec, opts RenderOptions) (map[string]any, error) {
 	if opts.Distro == "" {
 		return nil, fmt.Errorf("kubevirt: cloud_init is set but the guest distro could not be resolved (the shared cloud-init renderer needs a distro id to emit the sshd unit; declare `distro` on the entity, or use a containerDisk VM box whose ai.opencharly.vm.box labels carry it)")
 	}
@@ -388,7 +388,7 @@ func renderCloudInitVolume(kv spec.KubeVirt, opts RenderOptions) (map[string]any
 // renderCloudInit feeds the shared vmshared.RenderCloudInit with a synthetic VmSpec
 // built from the KubeVirt entity (the cloud_init block + the runtime-resolved distro +
 // ssh user), so the #VmCloudInit contract has ONE renderer (R3).
-func renderCloudInit(kv spec.KubeVirt, opts RenderOptions) (userData, metaData, networkConfig string, err error) {
+func renderCloudInit(kv kubevirtSpec, opts RenderOptions) (userData, metaData, networkConfig string, err error) {
 	vm := &spec.ResolvedVm{
 		Source:    spec.VmSource{Kind: "cloud_image", Distro: opts.Distro},
 		SSH:       &spec.VmSsh{User: opts.SSHUser},
@@ -405,7 +405,7 @@ func renderCloudInit(kv spec.KubeVirt, opts RenderOptions) (userData, metaData, 
 // renderDataVolumeTemplates emits the KubeVirt `dataVolumeTemplates` for a data_volume /
 // clone source so the VM owns the DV lifecycle (deleted with the VM). Returns nil for a
 // containerDisk / PVC source.
-func renderDataVolumeTemplates(kv spec.KubeVirt) []any {
+func renderDataVolumeTemplates(kv kubevirtSpec) []any {
 	src := kv.Source
 	if src.Kind != "data_volume" && src.Kind != "clone" {
 		return nil
@@ -441,7 +441,7 @@ func renderDataVolumeTemplates(kv spec.KubeVirt) []any {
 // RenderDataVolume renders a standalone CDI `DataVolume` CR for a data_volume / clone
 // source arm (used by the ensure-datavolume step for a source that is NOT owned by the
 // VM's dataVolumeTemplates). Returns nil when the entity's source is not data-volume-backed.
-func RenderDataVolume(name, namespace string, kv spec.KubeVirt) map[string]any {
+func RenderDataVolume(name, namespace string, kv kubevirtSpec) map[string]any {
 	src := kv.Source
 	if namespace == "" {
 		namespace = "default"

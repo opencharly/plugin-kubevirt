@@ -60,7 +60,7 @@ func containerDiskNodeAlias(node *spec.Deploy, name, kubeContext string) string 
 // I/O) so the prepare-venue call-site gate is unit-testable: deliver is false when
 // dry-run (no cluster touched), when there is no container_disk source, or when the node
 // is not charly-reachable (an external cluster pulls from its own registry).
-func containerDiskDeliveryTarget(kv *spec.KubeVirt, node *spec.Deploy, name, kubeContext string, dryRun bool) (alias string, deliver bool) {
+func containerDiskDeliveryTarget(kv *kubevirtSpec, node *spec.Deploy, name, kubeContext string, dryRun bool) (alias string, deliver bool) {
 	if dryRun || kv == nil || kv.Source.Kind != "container_disk" || kv.Source.Image == "" {
 		return "", false
 	}

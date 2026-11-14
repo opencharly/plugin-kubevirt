@@ -80,16 +80,18 @@ type kubevirtFirmware struct {
 	EFISecureBoot bool   `json:"efi_secure_boot,omitempty"`
 }
 
-// kubevirtDevices is the devices sub-block.
+// kubevirtDevices is the devices sub-block. Disks are the extra (non-boot) volumes,
+// carried as authored JSON objects.
 type kubevirtDevices struct {
-	AutoattachPodInterface   bool `json:"autoattach_pod_interface,omitempty"`
-	AutoattachGraphicsDevice bool `json:"autoattach_graphics_device,omitempty"`
-	AutoattachSerialConsole  bool `json:"autoattach_serial_console,omitempty"`
-	Rng                      bool `json:"rng,omitempty"`
-	Disks                    []map[string]any/* CUE top */ `json:"disks,omitempty"`
-	Host_devices             []kubevirtHostDevice `json:"host_devices,omitempty"`
-	Inputs                   []kubevirtInput      `json:"inputs,omitempty"`
-	Watchdog                 *kubevirtWatchdog    `json:"watchdog,omitempty"`
+	AutoattachPodInterface   bool             `json:"autoattach_pod_interface,omitempty"`
+	AutoattachGraphicsDevice bool             `json:"autoattach_graphics_device,omitempty"`
+	AutoattachSerialConsole  bool             `json:"autoattach_serial_console,omitempty"`
+	Rng                      bool             `json:"rng,omitempty"`
+	Disks                    []map[string]any `json:"disks,omitempty"`
+
+	Host_devices []kubevirtHostDevice `json:"host_devices,omitempty"`
+	Inputs       []kubevirtInput      `json:"inputs,omitempty"`
+	Watchdog     *kubevirtWatchdog    `json:"watchdog,omitempty"`
 }
 
 // kubevirtGPU is one GPU passthrough entry.

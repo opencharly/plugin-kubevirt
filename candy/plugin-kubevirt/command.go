@@ -384,7 +384,7 @@ func runCreateApply(root *KubeVirtCmd, entity string, apply bool) error {
 // resolveEntityForCLI resolves a kind:kubevirt entity for a CLI subcommand, which needs
 // the project-self-load reverse channel. Out-of-process CLI mode (no channel) errors
 // clearly, matching candy/plugin-vm's host-coupled CliMain contract.
-func resolveEntityForCLI(entity string) (*spec.KubeVirt, error) {
+func resolveEntityForCLI(entity string) (*kubevirtSpec, error) {
 	if commandExec == nil {
 		return nil, fmt.Errorf("resolving kind:kubevirt entity %q requires the compiled-in placement (no host reverse channel out-of-process)", entity)
 	}

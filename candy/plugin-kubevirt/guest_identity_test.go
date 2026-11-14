@@ -24,8 +24,8 @@ func stubBoxMetadata(t *testing.T, meta *spec.VmBoxMetadata, err error) {
 	t.Cleanup(func() { resolveVmBoxMetadata = prev })
 }
 
-func newContainerDiskKV(image string) *spec.KubeVirt {
-	kv := &spec.KubeVirt{}
+func newContainerDiskKV(image string) *kubevirtSpec {
+	kv := &kubevirtSpec{}
 	kv.Source.Kind = "container_disk"
 	kv.Source.Image = image
 	return kv
@@ -74,7 +74,7 @@ func TestResolveGuestIdentity_PartialOverrideIsFilledFromBoxLabels(t *testing.T)
 
 func TestResolveGuestIdentity_DataVolumeRequiresThePair(t *testing.T) {
 	stubBoxMetadata(t, nil, errors.New("image not local"))
-	kv := &spec.KubeVirt{}
+	kv := &kubevirtSpec{}
 	kv.Source.Kind = "data_volume"
 
 	_, _, err := resolveGuestIdentity(kv, "")
@@ -98,7 +98,7 @@ func TestResolveGuestIdentity_DataVolumeRequiresThePair(t *testing.T) {
 
 func TestResolveGuestIdentity_DistroOnlyStillErrors(t *testing.T) {
 	stubBoxMetadata(t, nil, errors.New("not local"))
-	kv := &spec.KubeVirt{}
+	kv := &kubevirtSpec{}
 	kv.Source.Kind = "pvc"
 	kv.Distro = "ubuntu" // ssh_user missing
 

@@ -368,7 +368,7 @@ func kvPrepareVenue(ctx context.Context, exec *sdk.Executor, p lifecycleParams, 
 }
 
 // bootRef resolves the boot medium ref for the state record.
-func bootRef(kv *spec.KubeVirt) string {
+func bootRef(kv *kubevirtSpec) string {
 	switch kv.Source.Kind {
 	case "container_disk":
 		return kv.Source.Image
@@ -381,7 +381,7 @@ func bootRef(kv *spec.KubeVirt) string {
 }
 
 // charlyInstallStrategy extracts cloud_init.charly_install.strategy ("" → auto).
-func charlyInstallStrategy(kv *spec.KubeVirt) string {
+func charlyInstallStrategy(kv *kubevirtSpec) string {
 	if kv != nil && kv.CloudInit != nil && kv.CloudInit.CharlyInstall != nil {
 		return kv.CloudInit.CharlyInstall.Strategy
 	}
@@ -395,7 +395,7 @@ func charlyInstallStrategy(kv *spec.KubeVirt) string {
 // (deploykit.VmCapabilitiesFromLabels). A source for which NEITHER resolves is an error: the
 // shared cloud-init renderer needs the distro to emit the right sshd unit and the user to
 // authorise a key, so the guest would otherwise boot unreachable.
-func resolveGuestIdentity(kv *spec.KubeVirt, _ string) (distro, sshUser string, err error) {
+func resolveGuestIdentity(kv *kubevirtSpec, _ string) (distro, sshUser string, err error) {
 	distro, sshUser = kv.Distro, kv.SSHUser
 	if kv.Source.Kind == "container_disk" {
 		if meta, merr := resolveVmBoxMetadata(kv.Source.Image); merr == nil && meta != nil {

@@ -1,7 +1,5 @@
 package kubevirt
 
-import "github.com/opencharly/spec/spec"
-
 // gpu.go — the KubeVirt host-device (GPU) mapping. #KubeVirt.gpus already models the
 // two KubeVirt forms directly (resource_name: a cluster device-plugin resource, e.g.
 // "nvidia.com/gpu"; device_name: a specific host device), so the renderer emits
@@ -17,17 +15,17 @@ import "github.com/opencharly/spec/spec"
 // GPU entries. A KubeVirt device-plugin resource token ("nvidia.com/gpu") maps to
 // resource_name; any other token is treated as a specific host device (device_name).
 // Empty tokens are skipped.
-func GPUsFromRequiresExclusive(requiresExclusive []string) []spec.KubevirtGPU {
-	var out []spec.KubevirtGPU
+func GPUsFromRequiresExclusive(requiresExclusive []string) []kubevirtGPU {
+	var out []kubevirtGPU
 	for _, tok := range requiresExclusive {
 		if tok == "" {
 			continue
 		}
 		if isDevicePluginResource(tok) {
-			out = append(out, spec.KubevirtGPU{ResourceName: tok})
+			out = append(out, kubevirtGPU{ResourceName: tok})
 			continue
 		}
-		out = append(out, spec.KubevirtGPU{DeviceName: tok})
+		out = append(out, kubevirtGPU{DeviceName: tok})
 	}
 	return out
 }
@@ -45,7 +43,7 @@ func isDevicePluginResource(tok string) bool {
 
 // RenderVirtualMachineGPUs returns the `resourceName=`/`deviceName=` entries a #KubeVirt
 // entity requests (the `charly kubevirt gpu` output).
-func RenderVirtualMachineGPUs(kv spec.KubeVirt) []string {
+func RenderVirtualMachineGPUs(kv kubevirtSpec) []string {
 	var out []string
 	for _, g := range kv.GPUs {
 		switch {

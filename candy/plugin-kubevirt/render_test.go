@@ -11,34 +11,34 @@ import (
 // plugin: every VirtualMachine / DataVolume shape decision is asserted here without a
 // cluster.
 
-func containerDiskKV() spec.KubeVirt {
-	return spec.KubeVirt{
+func containerDiskKV() kubevirtSpec {
+	return kubevirtSpec{
 		Cluster:     "k3s",
 		Namespace:   "charly",
 		Description: "test",
-		Source: spec.KubevirtSource{
+		Source: kubevirtSource{
 			Kind:       "container_disk",
 			Image:      "localhost/charly-vm:latest",
 			PullPolicy: "IfNotPresent",
 		},
 		Memory:  "4G",
-		CPU:     &spec.KubevirtCPU{Cores: 2, Sockets: 1, Threads: 1},
+		CPU:     &kubevirtCPU{Cores: 2, Sockets: 1, Threads: 1},
 		Machine: "q35",
-		Firmware: &spec.KubevirtFirmware{
+		Firmware: &kubevirtFirmware{
 			Bootloader:    "efi",
 			EFISecureBoot: true,
 		},
-		Devices: &spec.KubevirtDevices{
+		Devices: &kubevirtDevices{
 			Rng: true,
-			Inputs: []spec.KubevirtInput{
+			Inputs: []kubevirtInput{
 				{Type: "tablet", Bus: "usb"},
 			},
-			Watchdog: &spec.KubevirtWatchdog{Model: "i6300esb", Action: "reset"},
+			Watchdog: &kubevirtWatchdog{Model: "i6300esb", Action: "reset"},
 		},
-		GPUs: []spec.KubevirtGPU{
+		GPUs: []kubevirtGPU{
 			{ResourceName: "nvidia.com/gpu"},
 		},
-		Network:                       &spec.KubevirtNetwork{Interface: "masquerade", Model: "virtio"},
+		Network:                       &kubevirtNetwork{Interface: "masquerade", Model: "virtio"},
 		RunStrategy:                   "Always",
 		EvictionStrategy:              "LiveMigrate",
 		TerminationGracePeriodSeconds: 30,
@@ -199,8 +199,8 @@ func TestRenderVirtualMachine_ContainerDisk(t *testing.T) {
 // TestRenderVirtualMachine_DataVolume asserts the data_volume arm: a boot dataVolume
 // reference + dataVolumeTemplates, and the standalone DataVolume CR.
 func TestRenderVirtualMachine_DataVolume(t *testing.T) {
-	kv := spec.KubeVirt{
-		Source: spec.KubevirtSource{
+	kv := kubevirtSpec{
+		Source: kubevirtSource{
 			Kind: "data_volume",
 			DataVolume: map[string]any{
 				"http": map[string]any{"url": "https://example.com/disk.qcow2"},
@@ -256,7 +256,7 @@ func TestRenderVirtualMachine_DataVolume(t *testing.T) {
 // TestRenderDataVolume_NonDataVolumeSource asserts nil for a containerDisk/PVC source.
 func TestRenderDataVolume_NonDataVolumeSource(t *testing.T) {
 	for _, kind := range []string{"container_disk", "pvc"} {
-		kv := spec.KubeVirt{Source: spec.KubevirtSource{Kind: kind, Image: "x", PVC: "y"}}
+		kv := kubevirtSpec{Source: kubevirtSource{Kind: kind, Image: "x", PVC: "y"}}
 		if got := RenderDataVolume("n", "ns", kv); got != nil {
 			t.Errorf("kind %s: RenderDataVolume = %v, want nil", kind, got)
 		}
@@ -265,7 +265,7 @@ func TestRenderDataVolume_NonDataVolumeSource(t *testing.T) {
 
 // TestRenderVirtualMachine_PVC asserts the pvc arm references the claim name.
 func TestRenderVirtualMachine_PVC(t *testing.T) {
-	kv := spec.KubeVirt{Source: spec.KubevirtSource{Kind: "pvc", PVC: "my-disk"}}
+	kv := kubevirtSpec{Source: kubevirtSource{Kind: "pvc", PVC: "my-disk"}}
 	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "pvcvm"})
 	if err != nil {
 		t.Fatalf("RenderVirtualMachine: %v", err)
@@ -280,8 +280,8 @@ func TestRenderVirtualMachine_PVC(t *testing.T) {
 // TestRenderVirtualMachine_CloudInitRequiresIdentity asserts the loud failure when a
 // cloud_init is declared but the distro/ssh user could not be resolved (the SPEC GAP).
 func TestRenderVirtualMachine_CloudInitRequiresIdentity(t *testing.T) {
-	kv := spec.KubeVirt{
-		Source:    spec.KubevirtSource{Kind: "data_volume", Size: "1Gi", DataVolume: map[string]any{"blank": map[string]any{}}},
+	kv := kubevirtSpec{
+		Source:    kubevirtSource{Kind: "data_volume", Size: "1Gi", DataVolume: map[string]any{"blank": map[string]any{}}},
 		CloudInit: &spec.VmCloudInit{Hostname: "x"},
 	}
 	if _, err := RenderVirtualMachine(kv, RenderOptions{Name: "x"}); err == nil {
@@ -296,9 +296,9 @@ func TestRenderVirtualMachine_CloudInitRequiresIdentity(t *testing.T) {
 
 // TestRenderVirtualMachine_BiosDefault asserts an unset/nil firmware renders BIOS.
 func TestRenderVirtualMachine_BiosDefault(t *testing.T) {
-	kv := spec.KubeVirt{
-		Source:   spec.KubevirtSource{Kind: "container_disk", Image: "img"},
-		Firmware: &spec.KubevirtFirmware{},
+	kv := kubevirtSpec{
+		Source:   kubevirtSource{Kind: "container_disk", Image: "img"},
+		Firmware: &kubevirtFirmware{},
 	}
 	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "b"})
 	if err != nil {
@@ -317,9 +317,9 @@ func TestRenderVirtualMachine_BiosDefault(t *testing.T) {
 // Ubuntu cloud image needs, its bootloader living on the ESP — could not be expressed at all:
 // neither spelling reached the API as a decision, so the API's default decided.
 func TestRenderVirtualMachine_PlainUEFI(t *testing.T) {
-	kv := spec.KubeVirt{
-		Source:   spec.KubevirtSource{Kind: "container_disk", Image: "img"},
-		Firmware: &spec.KubevirtFirmware{Bootloader: "efi"},
+	kv := kubevirtSpec{
+		Source:   kubevirtSource{Kind: "container_disk", Image: "img"},
+		Firmware: &kubevirtFirmware{Bootloader: "efi"},
 	}
 	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "u"})
 	if err != nil {
@@ -342,9 +342,9 @@ func TestRenderVirtualMachine_PlainUEFI(t *testing.T) {
 
 // TestRenderVirtualMachine_GpuDeviceName asserts device_name GPU rendering.
 func TestRenderVirtualMachine_GpuDeviceName(t *testing.T) {
-	kv := spec.KubeVirt{
-		Source: spec.KubevirtSource{Kind: "container_disk", Image: "img"},
-		GPUs:   []spec.KubevirtGPU{{DeviceName: "0000:01:00.0"}},
+	kv := kubevirtSpec{
+		Source: kubevirtSource{Kind: "container_disk", Image: "img"},
+		GPUs:   []kubevirtGPU{{DeviceName: "0000:01:00.0"}},
 	}
 	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "g"})
 	if err != nil {
@@ -362,10 +362,10 @@ func TestRenderVirtualMachine_GpuDeviceName(t *testing.T) {
 // deviceName is required; name is optional and omitted when unset so KubeVirt's own
 // default (deviceName) applies.
 func TestRenderVirtualMachine_HostDevices(t *testing.T) {
-	kv := spec.KubeVirt{
-		Source: spec.KubevirtSource{Kind: "container_disk", Image: "img"},
-		Devices: &spec.KubevirtDevices{
-			Host_devices: []spec.KubevirtHostDevice{
+	kv := kubevirtSpec{
+		Source: kubevirtSource{Kind: "container_disk", Image: "img"},
+		Devices: &kubevirtDevices{
+			Host_devices: []kubevirtHostDevice{
 				{Device_name: "kvm", Name: "kvm"},
 				{Device_name: "nvidia.com/gpu"},
 			},
@@ -396,8 +396,8 @@ func TestRenderVirtualMachine_HostDevices(t *testing.T) {
 // TestRenderVirtualMachine_Clone asserts the clone arm emits a DataVolume template
 // sourced from the clone PVC.
 func TestRenderVirtualMachine_Clone(t *testing.T) {
-	kv := spec.KubeVirt{
-		Source: spec.KubevirtSource{Kind: "clone", Clone: &spec.KubevirtCloneSource{From: "golden-vm"}, Size: "30Gi"},
+	kv := kubevirtSpec{
+		Source: kubevirtSource{Kind: "clone", Clone: &kubevirtCloneSource{From: "golden-vm"}, Size: "30Gi"},
 	}
 	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "clonevm"})
 	if err != nil {
@@ -412,7 +412,7 @@ func TestRenderVirtualMachine_Clone(t *testing.T) {
 
 // TestRenderVirtualMachineGPUs asserts the CLI/output helper.
 func TestRenderVirtualMachineGPUs(t *testing.T) {
-	kv := spec.KubeVirt{GPUs: []spec.KubevirtGPU{{ResourceName: "nvidia.com/gpu"}, {DeviceName: "0000:01:00.0"}}}
+	kv := kubevirtSpec{GPUs: []kubevirtGPU{{ResourceName: "nvidia.com/gpu"}, {DeviceName: "0000:01:00.0"}}}
 	got := RenderVirtualMachineGPUs(kv)
 	want := []string{"resourceName=nvidia.com/gpu", "deviceName=0000:01:00.0"}
 	if len(got) != len(want) {
@@ -443,7 +443,7 @@ func TestGPUsFromRequiresExclusive(t *testing.T) {
 // TestRenderVirtualMachine_RequiresExclusiveGPU asserts a deploy-level requires_exclusive
 // reaches spec.domain.devices.gpus when the entity declares no explicit gpus.
 func TestRenderVirtualMachine_RequiresExclusiveGPU(t *testing.T) {
-	kv := spec.KubeVirt{Source: spec.KubevirtSource{Kind: "container_disk", Image: "img"}}
+	kv := kubevirtSpec{Source: kubevirtSource{Kind: "container_disk", Image: "img"}}
 	obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "rg", RequiresExclusive: []string{"nvidia.com/gpu"}})
 	if err != nil {
 		t.Fatal(err)
@@ -459,7 +459,7 @@ func TestRenderVirtualMachine_RequiresExclusiveGPU(t *testing.T) {
 // scanned /disk/disk.img — e.g. a charly VM box emitted at /disk.qcow2). Fails without
 // the field/render (the path key would be absent).
 func TestRenderVirtualMachine_ContainerDiskPath(t *testing.T) {
-	render := func(kv spec.KubeVirt) map[string]any {
+	render := func(kv kubevirtSpec) map[string]any {
 		obj, err := RenderVirtualMachine(kv, RenderOptions{Name: "vm", Namespace: "default", Distro: "arch", SSHUser: "arch", SSHKey: "ssh-ed25519 AAAATEST"})
 		if err != nil {
 			t.Fatalf("RenderVirtualMachine: %v", err)

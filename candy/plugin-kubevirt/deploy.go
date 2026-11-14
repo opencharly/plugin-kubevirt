@@ -144,7 +144,7 @@ func invokeExecute(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeReply,
 }
 
 // resolveKubeVirtEntity self-loads the project PLUGIN-SIDE and decodes the named
-// kind:kubevirt template body into a spec.KubeVirt. The body is read from
+// kind:kubevirt template body into a kubevirtSpec. The body is read from
 // uf.PluginKinds["kubevirt"] — the fold every standalone-substrate template lands in
 // (the SAME map the kernel's fold writes). The template is already host-decoded
 // (defaults applied) before it is folded, so a direct decode is faithful.
@@ -153,7 +153,7 @@ func invokeExecute(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeReply,
 // UnifiedFile.ProjectTemplates().ByKind omits "kubevirt" (fillNamespacedTemplates never
 // copies the KubeVirt map). Reading PluginKinds directly closes that gap without
 // reimplementing the loader.
-func resolveKubeVirtEntity(ctx context.Context, exec *sdk.Executor, dir, name string) (*spec.KubeVirt, error) {
+func resolveKubeVirtEntity(ctx context.Context, exec *sdk.Executor, dir, name string) (*kubevirtSpec, error) {
 	uf, ok, err := loaderkit.LoadUnifiedViaExecutor(ctx, exec, dir)
 	if err != nil {
 		return nil, err
@@ -175,7 +175,7 @@ func resolveKubeVirtEntity(ctx context.Context, exec *sdk.Executor, dir, name st
 		}
 		return nil, fmt.Errorf("found but has no template body (a clone-base bed hop — resolve via the bed's own from:)")
 	}
-	var kv spec.KubeVirt
+	var kv kubevirtSpec
 	if err := json.Unmarshal(body, &kv); err != nil {
 		return nil, fmt.Errorf("decode kubevirt template: %w", err)
 	}
@@ -190,7 +190,7 @@ func resolveKubeVirtEntity(ctx context.Context, exec *sdk.Executor, dir, name st
 // addressed by is honoured everywhere the venue reaches the cluster — including the managed
 // `virtctl port-forward` argv, which is the only route into the guest. An empty result is
 // valid (the dynamic client then uses the ambient kubeconfig's current-context).
-func resolveKubeContext(ctx context.Context, exec *sdk.Executor, dir string, kv *spec.KubeVirt) (clusterTarget, error) {
+func resolveKubeContext(ctx context.Context, exec *sdk.Executor, dir string, kv *kubevirtSpec) (clusterTarget, error) {
 	if kv.KubeContext != "" {
 		return clusterTarget{context: kv.KubeContext}, nil
 	}

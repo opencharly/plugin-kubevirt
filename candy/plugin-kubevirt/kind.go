@@ -16,7 +16,7 @@ import (
 // #KubeVirtValue def, and threads the result in op.Env
 // (spec.StructuralKindLoadEnv.Standalone). This OpLoad RETURNS it — a deploy echo
 // (spec.Deploy) the host folds into uf.Deploy, or a template echo (the typed
-// spec.KubeVirt JSON) the host folds into the kubevirt template map. A substrate value
+// kubevirtSpec JSON) the host folds into the kubevirt template map. A substrate value
 // is RICH + core-referencing (#KubeVirt + #Deploy + #VmCloudInit), so it cannot be
 // soundly re-decoded from the raw op.Params.
 //

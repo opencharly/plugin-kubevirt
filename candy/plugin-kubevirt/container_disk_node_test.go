@@ -42,12 +42,12 @@ func TestContainerDiskNodeAlias(t *testing.T) {
 func TestContainerDiskDeliveryTarget(t *testing.T) {
 	node := &spec.Deploy{MemberOf: "check-kubevirt-vm"}
 	ref := "localhost/charly-check-kubevirt-vm-box:stable"
-	cd := func() *spec.KubeVirt {
-		return &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "container_disk", Image: ref}}
+	cd := func() *kubevirtSpec {
+		return &kubevirtSpec{Source: kubevirtSource{Kind: "container_disk", Image: ref}}
 	}
 	cases := []struct {
 		name        string
-		kv          *spec.KubeVirt
+		kv          *kubevirtSpec
 		node        *spec.Deploy
 		kubeContext string
 		dryRun      bool
@@ -56,8 +56,8 @@ func TestContainerDiskDeliveryTarget(t *testing.T) {
 	}{
 		{"container_disk + reachable node", cd(), node, "", false, true, "charly-check-kubevirt-vm"},
 		{"dry-run never delivers", cd(), node, "", true, false, ""},
-		{"non-container_disk source", &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "data_volume"}}, node, "", false, false, ""},
-		{"empty image", &spec.KubeVirt{Source: spec.KubevirtSource{Kind: "container_disk", Image: ""}}, node, "", false, false, ""},
+		{"non-container_disk source", &kubevirtSpec{Source: kubevirtSource{Kind: "data_volume"}}, node, "", false, false, ""},
+		{"empty image", &kubevirtSpec{Source: kubevirtSource{Kind: "container_disk", Image: ""}}, node, "", false, false, ""},
 		{"nil entity", nil, node, "", false, false, ""},
 		{"external cluster (no reachable node)", cd(), nil, "prod", false, false, ""},
 	}

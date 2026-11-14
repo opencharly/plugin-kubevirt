@@ -214,7 +214,7 @@ func TestValidateKubeVirtDeep(t *testing.T) {
 // TestKindLoad_TemplateEcho asserts the host-pre-decoded template is echoed verbatim.
 func TestKindLoad_TemplateEcho(t *testing.T) {
 	tmpl := []byte(`{"source":{"kind":"container_disk","image":"x"},"memory":"2G"}`)
-	env := spec.StructuralKindLoadEnv{Standalone: &spec.StandaloneLoad{Shape: "template", Template: tmpl}}
+	env := spec.StructuralKindLoadEnv{Standalone: &spec.StandaloneLoad{Shape: "template", Body: tmpl}}
 	reply, err := kindLoad(&pb.InvokeRequest{Op: sdk.OpLoad, EnvJson: mustJSON(t, env)})
 	if err != nil {
 		t.Fatalf("kindLoad: %v", err)
@@ -227,7 +227,11 @@ func TestKindLoad_TemplateEcho(t *testing.T) {
 // TestKindLoad_DeployEcho asserts the host-pre-decoded deploy node is echoed.
 func TestKindLoad_DeployEcho(t *testing.T) {
 	dep := &spec.Deploy{From: "myvm", Target: "kubevirt"}
-	env := spec.StructuralKindLoadEnv{Standalone: &spec.StandaloneLoad{Shape: "deploy", Deploy: dep}}
+	depJSON, merr := json.Marshal(dep)
+	if merr != nil {
+		t.Fatalf("marshal deploy: %v", merr)
+	}
+	env := spec.StructuralKindLoadEnv{Standalone: &spec.StandaloneLoad{Shape: "deploy", Body: depJSON}}
 	reply, err := kindLoad(&pb.InvokeRequest{Op: sdk.OpLoad, EnvJson: mustJSON(t, env)})
 	if err != nil {
 		t.Fatalf("kindLoad: %v", err)
@@ -270,7 +274,7 @@ func TestProvider_ClassRouting(t *testing.T) {
 	}
 
 	// kind OpLoad via provider → delegates to kindLoad.
-	env := spec.StructuralKindLoadEnv{Standalone: &spec.StandaloneLoad{Shape: "template", Template: []byte(`{"a":1}`)}}
+	env := spec.StructuralKindLoadEnv{Standalone: &spec.StandaloneLoad{Shape: "template", Body: []byte(`{"a":1}`)}}
 	if _, err := p.Invoke(context.Background(), &pb.InvokeRequest{Class: "kind", Op: sdk.OpLoad, EnvJson: mustJSON(t, env)}); err != nil {
 		t.Fatalf("kind OpLoad: %v", err)
 	}

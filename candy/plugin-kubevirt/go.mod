@@ -4,8 +4,8 @@ go 1.26.8
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/opencharly/sdk v0.2026318.1654
-	github.com/opencharly/spec v0.2026318.2106
+	github.com/opencharly/sdk v0.2026320.1345
+	github.com/opencharly/spec v0.2026320.1252
 	google.golang.org/grpc v1.83.2
 	k8s.io/apimachinery v0.37.0
 	k8s.io/client-go v0.37.0
